@@ -53,6 +53,8 @@ internal static class FirstPersonWorldGuard
     private const float MaxStableMoveSq = 0.25f * 0.25f;
     private const float SameHeadingDot = 0.90f;
 
+    internal static void ClearCameraContact() => ForgetContact();
+
     private static void ForgetContact()
     {
         LastEyeCorrection = Vector3.Zero;
@@ -112,15 +114,15 @@ internal static class FirstPersonWorldGuard
     {
         G = KnobGroup.Declare("fpsurface", "Controls", "Camera", order: 519,
                               title: "First-person surface guard");
-        Enabled = G.Toggle("enabled", "Keep first-person eye out of walls", true,
-            help: "Restricts the visual eye against world geometry after attack camera tracking; no character movement changes.");
+        Enabled = G.Toggle("enabled", "Legacy camera wall guard (unused in Driving)", false,
+            tier: Tier.ChatOnly, help: "Compatibility only. Driving no longer displaces the eye for world collision.");
         KeyholeOff = G.Toggle("keyholeoff", "Disable keyhole in first-person", true,
             help: "Closes NWN's roof/wall keyhole only for the active first-person world camera in Alloy mode.");
-        Near = G.Slider("near", "Forward clearance", 0.05f, 0.35f, 0.01f, 0.16f, "m", Tier.Advanced,
+        Near = G.Slider("near", "Forward clearance", 0.05f, 0.35f, 0.01f, 0.16f, "m", Tier.ChatOnly,
             help: "Extra space reserved ahead of the visual eye to reduce near-plane wall penetration.");
-        Margin = G.Slider("margin", "Wall clearance", 0.01f, 0.20f, 0.01f, 0.06f, "m", Tier.Advanced,
+        Margin = G.Slider("margin", "Wall clearance", 0.01f, 0.20f, 0.01f, 0.06f, "m", Tier.ChatOnly,
             help: "Keep the collision eye this far before an obstacle intersection.");
-        Fan = G.Slider("fan", "Collision ray half-width", 0f, 0.18f, 0.01f, 0.08f, "m", Tier.Advanced,
+        Fan = G.Slider("fan", "Collision ray half-width", 0f, 0.18f, 0.01f, 0.08f, "m", Tier.ChatOnly,
             help: "13 rays approximate eye clearance; not a real swept sphere or complete near-plane hull.");
     }
 
@@ -156,6 +158,7 @@ internal static class FirstPersonWorldGuard
     {
         LastEyeCorrection = Vector3.Zero;
         ContactConstrained = false;
+        if (CameraService.Mode == 2) { ForgetContact(); return; }
         if (!Enabled.V || !FirstPersonActive || player == IntPtr.Zero) { ForgetContact(); return; }
         if (!Finite(eye) || !float.IsFinite(rotation.X) || !float.IsFinite(rotation.Y)
             || !float.IsFinite(rotation.Z) || !float.IsFinite(rotation.W))

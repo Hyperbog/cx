@@ -44,6 +44,64 @@ public sealed unsafe class StepGuardService : IExtenderService
 
     private static bool _live, _probeOk;
     private static int _steps, _walkRefusals, _driveRefusals;
+    private const int M11CheckCreatures = 1;
+    private const float M11ProbeDistance = 0.10f;
+    private static int _m11Completions;
+
+    private static bool M11Finite(Vector3 v) =>
+        float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
+
+    private static bool M11Line(IntPtr creature, CNWCArea area, CPathfindInformation path,
+                                Vector3 from, Vector3 to)
+    {
+        Span<float> space = path.SpaceArgs;
+        if (!M11Finite(from) || !M11Finite(to) || !float.IsFinite(space[0]) ||
+            !float.IsFinite(space[1]) || space[0] < 0f || space[1] < 0f) return true;
+        Vec3 a = Vec(from), b = Vec(to);
+        return _testLine(area.Ptr, creature, VectorArg.Of(&a), VectorArg.Of(&b),
+            space[0], space[1], M11CheckCreatures) == 1;
+    }
+
+    // Preflight the requested native movement, not the camera. Fail open
+    // when the native walk hook/layout has not established its prerequisites.
+    internal static bool M11CanTravel(IntPtr creature, Vector2 direction)
+    {
+        if (!_probeOk || creature == IntPtr.Zero || !float.IsFinite(direction.X) ||
+            !float.IsFinite(direction.Y)) return true;
+        IntPtr module = CameraService.Module();
+        CNWCArea area = module == IntPtr.Zero ? default : new CNWCModule(module).CurrentArea;
+        CPathfindInformation path = new CNWCCreature(creature).Pathfind;
+        if (area.IsNull || path.IsNull) return true;
+        Vector3 from = new CNWCObject(creature).Position;
+        return M11Line(creature, area, path, from,
+            from + new Vector3(direction.X, direction.Y, 0f) * M11ProbeDistance);
+    }
+
+    // Finish only a known keyboard-owned, single-point client prediction.
+    // Shorten its destination BEFORE native advancement, letting the engine
+    // perform arrival/animation cleanup. Never set a drive flag, animation,
+    // server path, array pointer/count, or position here.
+    private static void M11PrepareLocalStep(CNWCCreature c, CNWCArea area,
+                                             CPathfindInformation path, Vector3 from)
+    {
+        if (!CameraDriveService.M11KeyboardPath(c.Ptr, area.Ptr, out bool stop) ||
+            c.Driving != 1 || c.PathFromServer != 0 || c.CorrectionMs != 0 ||
+            c.WaypointCount != 1 || c.Waypoints == IntPtr.Zero ||
+            c.WaypointCursor != c.Waypoints || JumpPositionService.AirborneFor(c.Ptr)) return;
+        Vector3 actual = new CNWCObject(c.Ptr).Position;
+        if (!M11Finite(from) || !M11Finite(actual) ||
+            Vector3.DistanceSquared(from, actual) > 0.0004f) return;
+        Vector3 endpoint = *(Vector3*)c.Waypoints;
+        if (!M11Finite(endpoint) || Vector3.DistanceSquared(from, endpoint) > 16f) return;
+        Vector3 delta = endpoint - from;
+        float xy = MathF.Sqrt(delta.X * delta.X + delta.Y * delta.Y);
+        if (xy < 0.001f) return; // already at arrival; native owns cleanup
+        float fraction = MathF.Min(1f, M11ProbeDistance / xy);
+        if (!stop && M11Line(c.Ptr, area, path, from, from + delta * fraction)) return;
+        *(Vector3*)c.Waypoints = from;
+        if (++_m11Completions <= 120)
+            _log?.Info($"[m11path] shortened local prediction #{_m11Completions}; stop={(stop ? 1 : 0)}");
+    }
 
     public void Initialize(ExtenderLog log, HookService hooks)
     {
@@ -82,6 +140,7 @@ public sealed unsafe class StepGuardService : IExtenderService
 
         ref Vector3 desired = ref creature.DesiredPos;
         Vector3 before = desired;
+        M11PrepareLocalStep(creature, area, pathfind, before);
         // Fix14D-D5 OBSERVER BEGIN: pre-native position capture; no engine writes.
         long d5Start = System.Diagnostics.Stopwatch.GetTimestamp();
         bool d5Watch = CameraDriveService.D4TraceWindow(d5Start, out int d5ReleaseId, out long d5ReleaseAt);
@@ -100,7 +159,8 @@ public sealed unsafe class StepGuardService : IExtenderService
         Span<float> space = pathfind.SpaceArgs;
         // TestDirectLine takes both Vectors BY VALUE: the copies are what VectorArg points Win64 at.
         Vec3 from = Vec(before), to = Vec(after);
-        int clear = _testLine(area.Ptr, cre, VectorArg.Of(&from), VectorArg.Of(&to), space[0], space[1], NoCreatures);
+        int checkCreatures = CameraDriveService.M11KeyboardPath(cre, area.Ptr, out _) ? M11CheckCreatures : NoCreatures;
+        int clear = _testLine(area.Ptr, cre, VectorArg.Of(&from), VectorArg.Of(&to), space[0], space[1], checkCreatures);
         Fix14CProbe.Guard(clear, creature.Driving, before, after);
         if (clear == 1) { _steps++; return r; }
         desired = before;

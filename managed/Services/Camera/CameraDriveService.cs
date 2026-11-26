@@ -84,6 +84,75 @@ public sealed unsafe class CameraDriveService : IExtenderService
     private static long _lastSendTick, _lastTick;
     private static int _sends, _latches, _aborts;
 
+    // A keyboard-owned local drive, distinct from raw held keys and from
+    // server/click-to-move paths. A stop request is scoped to player and area.
+    private static IntPtr _m11Player, _m11Area;
+    private static bool _m11Stopped;
+    private static long _m11StopAt;
+    private static int _m11Blocks, _m11Slides;
+
+    private static bool M11Scope => _probeOk && CameraService.Mode == 2 &&
+        CameraModes.Driving.Enabled.V && CameraModes.Driving.FirstPersonActive &&
+        !CameraService.GateUp && !CameraService.NpcDialogActive && !FreeCameraService.Active;
+
+    private static void M11Reset()
+    {
+        _m11Player = _m11Area = IntPtr.Zero;
+        _m11Stopped = false; _m11StopAt = 0;
+    }
+
+    private static IntPtr M11Area()
+    {
+        IntPtr module = CameraService.Module();
+        return module == IntPtr.Zero ? IntPtr.Zero : new CNWCModule(module).CurrentArea.Ptr;
+    }
+
+    private static void M11Stop()
+    {
+        if (_m11Player == IntPtr.Zero || _m11Stopped) return;
+        _m11Stopped = true; _m11StopAt = Environment.TickCount64;
+        _log?.Info("[m11drive] keyboard drive stopped; native local path may finish");
+    }
+
+    internal static bool M11KeyboardPath(IntPtr creature, IntPtr area, out bool stop)
+    {
+        stop = _m11Stopped;
+        return M11Scope && creature != IntPtr.Zero && area != IntPtr.Zero &&
+            creature == _m11Player && area == _m11Area &&
+            (!stop || (!Held && Environment.TickCount64 - _m11StopAt <= 1500));
+    }
+
+    private static bool M11Travel(IntPtr creature, Vector3 right, float f, float s)
+    {
+        Vector2 wish = new(right.X * s - right.Y * f, right.Y * s + right.X * f);
+        if (wish.LengthSquared() < 0.000001f) return true;
+        return StepGuardService.M11CanTravel(creature, Vector2.Normalize(wish));
+    }
+
+    private static void M11Filter(IntPtr creature, Vector3 right, ref float f, ref float s)
+    {
+        if (M11Travel(creature, right, f, s)) return;
+        // Preserve a requested clear axis on diagonal contact, rather than
+        // inventing sideways input on a straight head-on collision.
+        if (f != 0f && s != 0f)
+        {
+            if (M11Travel(creature, right, f, 0f)) { s = 0f; _m11Slides++; return; }
+            if (M11Travel(creature, right, 0f, s)) { f = 0f; _m11Slides++; return; }
+        }
+        f = s = 0f;
+    }
+
+    private static void M11ZeroStep(IntPtr app, CClientExoAppInternal a)
+    {
+        Span<int> keys = a.DriveKeys;
+        Span<int> saved = stackalloc int[KeyCount];
+        keys.CopyTo(saved);
+        int walk = a.DriveWalk;
+        a.DriveWalk = 0; keys.Clear();
+        try { Step(app, a); }
+        finally { a.DriveWalk = walk; saved.CopyTo(keys); }
+    }
+
     public void Initialize(ExtenderLog log, HookService hooks)
     {
         _log = log;
@@ -110,6 +179,9 @@ public sealed unsafe class CameraDriveService : IExtenderService
         var a = new CClientExoAppInternal(app);
         Span<int> keys = a.DriveKeys;
         D2ObserveInput(a); // observer only, before the existing manual/native abort paths
+        if (!M11Scope || (_m11Player != IntPtr.Zero && M11Area() != _m11Area))
+            M11Reset();
+        else if (DriveTraceMask(a) == 0) M11Stop();
         if (FreeCameraService.Active)
         {
             // The keys fly the camera; the engine sees none held (a drive under way is aborted, once).
@@ -161,6 +233,35 @@ public sealed unsafe class CameraDriveService : IExtenderService
             }
             if (f == 0f && s == 0f) why = TurnAxis != 0 ? Why.TurnOnly : Why.Cancelled;
         }
+        if (M11Scope && why == Why.Active && firstPersonStrafe)
+        {
+            IntPtr area = M11Area();
+            if (area != IntPtr.Zero && (_m11Player != cre || _m11Area != area))
+            { M11Reset(); _m11Player = cre; _m11Area = area; }
+            if (area != IntPtr.Zero && !JumpPositionService.AirborneFor(cre))
+            {
+                Vector3 right = CameraService.Right(new CX.Engine.Camera(cam).Rot);
+                M11Filter(cre, right, ref f, ref s);
+                if (f == 0f && s == 0f)
+                {
+                    if (!_m11Stopped)
+                    {
+                        _m11Blocks++;
+                        _log?.Info($"[m11drive] blocked input #{_m11Blocks}; slides={_m11Slides}");
+                        if (_active && ClientApi.Message() != IntPtr.Zero)
+                        { ClientApi.Send(MajorInput, MinorAbortDrive, null, 0); _aborts++; }
+                    }
+                    M11Stop();
+                    _active = false; NoForward = false; TurnAxis = 0;
+                    _why = Why.Idle; AirWish = Vector2.Zero;
+                    M11ZeroStep(app, a);
+                    return;
+                }
+            }
+            if (_m11Stopped) a.DriveChanged = 1; // clear direction resumes immediately
+            _m11Stopped = false; _m11StopAt = 0;
+        }
+        else if (M11Scope && why == Why.Cancelled) M11Stop();
         _why = why;
         AirWish = Vector2.Zero;
         if (why == Why.Active && firstPersonStrafe && (f != 0f || s != 0f))

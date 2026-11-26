@@ -140,6 +140,7 @@ public sealed unsafe class CameraService : IExtenderService
         UniversalEyeClearance.Configure(log);
         KnobSurface.Note(AttackCameraFollow.Diagnostics);
         KnobSurface.Note(FirstPersonWorldGuard.Diagnostics);
+        log.Info("EFP M11: fixed actor-root eye; collision handled at keyboard/native walking boundary");
         KnobSurface.Note(HeadBoneCamera.Diagnostics);
         KnobSurface.Note(JumpPositionService.Diagnostics);
         SceneRay.Init();
@@ -388,7 +389,8 @@ public sealed unsafe class CameraService : IExtenderService
         // range of ours: a max past 90 is the player's to have.
         float lo = PitchFloor, hi = PitchCeil;
         if (b.PitchClamp != 0f) { lo = b.PitchMin[0]; hi = b.PitchMin[1]; }
-        float pitch = Math.Clamp(_sPitch + m.PitchCurve.V * (_sDist - m.PitchRef.V), lo, hi);
+        float pitch = Math.Clamp(mode == 2 && m.FirstPersonActive ? _sPitch :
+            _sPitch + m.PitchCurve.V * (_sDist - m.PitchRef.V), lo, hi);
         _outPitch = pitch;
         Quaternion q = Pose(_sYaw, pitch);
         if (mode != 2 || !m.FirstPersonActive) JumpPreview.Reset();
@@ -413,13 +415,27 @@ public sealed unsafe class CameraService : IExtenderService
                 // Fix8: camera-only first-person attack motion. Never touches
                 // the player, jump motor, reticle, or input controls.
                 FirstPersonVisibility.Publish(player);
-        HeadBoneCamera.Apply(player, dt, ref eye, q);
-        AnimationCameraMotion.Apply(true, player, dt, ref eye, ref q);
-        AttackCameraFollow.Apply(player, dt, ref eye, ref q);
-        HeadBoneCamera.MaintainHeadClearance(player, ref eye, q);
-        HeadBoneCamera.KeepMovementModelBehindEye(player, dt, ref eye, q);
-        FirstPersonWorldGuard.Resolve(player, ref eye, q);
-        Vector3 localVisualCorrection = UniversalEyeClearance.Apply(player, eye, q, FirstPersonWorldGuard.LastEyeCorrection, out bool validatedCore);
+        if (mode == 2)
+        {
+            // Single stable eye anchor. No head/attack/tether translation, no
+            // yaw-dependent orbit, no wall ray retreat, no collision smoothing.
+            // Native world movement alone moves the camera.
+            eye = new CNWCObject(player).Position + Vector3.UnitZ * m.EyeHeight.V;
+            if (!NpcDialogActive) HeadBoneCamera.TurnCharacter(player, q);
+            FirstPersonWorldGuard.ClearCameraContact();
+        }
+        else
+        {
+            HeadBoneCamera.Apply(player, dt, ref eye, q);
+            AnimationCameraMotion.Apply(true, player, dt, ref eye, ref q);
+            AttackCameraFollow.Apply(player, dt, ref eye, ref q);
+            HeadBoneCamera.MaintainHeadClearance(player, ref eye, q);
+            HeadBoneCamera.KeepMovementModelBehindEye(player, dt, ref eye, q);
+            FirstPersonWorldGuard.Resolve(player, ref eye, q);
+        }
+        // Only the local render model may move to clear its own head/torso.
+        Vector3 localVisualCorrection = UniversalEyeClearance.Apply(player, eye, q,
+            mode == 2 ? Vector3.Zero : FirstPersonWorldGuard.LastEyeCorrection, out bool validatedCore);
         FirstPersonVisibility.PublishEyeCollision(player, localVisualCorrection, validatedCore);
                 c.Place(eye, q);
                 _pos = eye;

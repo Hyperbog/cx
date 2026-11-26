@@ -194,7 +194,7 @@ internal static class HeadBoneCamera
     /// existing facing-vector writes, but allows stationary mouse turns too.
     /// No head rotations, pitch, camera yaw rewrites, or movement packets are synthesized.
     /// </summary>
-    private static void TurnCharacter(IntPtr player, Quaternion rotation)
+    internal static void TurnCharacter(IntPtr player, Quaternion rotation)
     {
         if (!CameraModes.Driving.FacingActive) return;
         // The native drive step owns facing during movement; avoid a later
