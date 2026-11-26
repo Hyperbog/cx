@@ -222,6 +222,7 @@ public sealed unsafe class MouseLookService : IExtenderService
     private static bool ActionGateOpen()
         => MouseLook.ActionEnabled && GameGate.InGame && CameraService.Mode >= 0 && !CameraService.GateUp && !FreeCameraService.Active
            && (CameraService.Mode != 2 || CameraModes.Driving.Enabled.V)
+           && !CameraService.NpcDialogActive // Keep the native NPC dialogue cursor clickable.
            && !UiHost.AnyKeyboardOwner && !UiHost.AnySuppressChords;
 
     // v0.4: Alt no longer releases the mouse; the Z toggle above owns this latch.

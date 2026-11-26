@@ -54,6 +54,10 @@ public sealed unsafe class CameraService : IExtenderService
 
     // ---- last solve, for the /knobs note (written hot, read cold) ----
     private static Gate _gate = Gate.NoModule;
+    // NPC dialogue may take the engine camera, but Driving keeps the player's last eye orientation.
+    // The UI's mouse-capture refusal is independent from this camera-pose gate.
+    private static bool _npcDialogHold;
+    private static float _npcDialogYaw, _npcDialogPitch;
     private static int _mode = -1;
     private static float _yaw, _pitch, _dist, _fovRead, _outPitch;
     private static Vector3 _pos;
@@ -310,6 +314,32 @@ public sealed unsafe class CameraService : IExtenderService
         }
         Gate g = Check(self, cam, out int mode);
         _gate = g; _mode = mode;
+        // The engine changes follow yaw/pitch for NPC dialogue. Lock the player's last
+        // first-person look while its conversation UI is visible, including the exit edge.
+        bool fpDialog = g == Gate.Active && mode == 2 && !FreeCameraService.Active && NpcDialogActive;
+        if (fpDialog)
+        {
+            if (!_npcDialogHold)
+            {
+                _npcDialogYaw = _lastMode == 2 ? _sYaw : b.Yaw;
+                _npcDialogPitch = _lastMode == 2 ? _sPitch : b.Pitch;
+                _npcDialogHold = true;
+                _log?.Info("[fpdialog] Driving eye camera held at pre-dialog yaw/pitch; cursor stays available");
+            }
+            b.Yaw = _npcDialogYaw; b.Pitch = _npcDialogPitch;
+            b.YawVel = 0f; b.YawImpulse = 0f; b.PitchImpulse = 0f;
+        }
+        else if (_npcDialogHold)
+        {
+            // Do not inherit the engine's cinematic turn on the first frame after closing dialogue.
+            if (g == Gate.Active && mode == 2 && !FreeCameraService.Active)
+            {
+                b.Yaw = _npcDialogYaw; b.Pitch = _npcDialogPitch;
+                b.YawVel = 0f; b.YawImpulse = 0f; b.PitchImpulse = 0f;
+            }
+            _npcDialogHold = false;
+            _log?.Info("[fpdialog] dialogue finished; normal first-person mouse look resumed");
+        }
         // Phase 3.1: jump is stepped BEFORE camera follow, not during Adjust.
         _yaw = b.Yaw; _pitch = b.Pitch; _dist = b.Dist;
         _fovRead = c.ViewAngle;
@@ -605,7 +635,10 @@ public sealed unsafe class CameraService : IExtenderService
         CClientOptions opts = intern.ClientOptions;
         if (!opts.IsNull) mode = opts.CameraMode;   // before the gates: the drive needs it held down too
         if (mod.Camera.Ptr != cam) return Gate.NotWorldCamera;
-        if (mod.DialogCamera != 0) return Gate.Dialog;
+        // Driving first-person must keep owning the world eye even during ordinary NPC dialogue.
+        // Other modes still yield to the native conversation camera.
+        if (mod.DialogCamera != 0 && !(mode == 2 && CameraModes.Driving.Enabled.V
+            && CameraModes.Driving.FirstPersonActive)) return Gate.Dialog;
         if (mod.CutsceneRate != 0f) return Gate.Cutscene;
         if (mod.FindClearView != 0) return Gate.ClearView;
         if (mod.CameraAttached != intern.PlayerCreatureId) return Gate.Attached;
@@ -630,6 +663,16 @@ public sealed unsafe class CameraService : IExtenderService
     /// because its Control interleaves with the world's and would flap the flag every frame, and a mode's master
     /// off (<see cref="Gate.Off"/>) is not one either: mouse-look and the free camera have masters of their own.</summary>
     public static bool GateUp => _live && _probeOk && _gate is not (Gate.Active or Gate.NotWorldCamera or Gate.Off);
+    /// <summary>A native NPC conversation is modal for input even though Driving still owns
+    /// its camera pose. Never use GateUp alone to decide whether to capture the cursor.</summary>
+    internal static bool NpcDialogActive
+    {
+        get
+        {
+            IntPtr module = Module();
+            return module != IntPtr.Zero && new CNWCModule(module).DialogCamera != 0;
+        }
+    }
     /// <summary>The last Control's verdict by name, and whether the layer is live at all.</summary>
     internal static string GateName => GateNames[(int)_gate];
     internal static bool Live => _live && _probeOk;
