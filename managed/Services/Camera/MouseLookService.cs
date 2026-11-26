@@ -1,3 +1,21 @@
+// BEGIN FIX14D-J4 PUBLICATION NOTES -- comments only; original source follows unchanged.
+// MODULE: managed/Services/Camera/MouseLookService.cs
+// PURPOSE: First-person mouse-look and contextual dot
+// SOURCE: validated local NWNCX checkpoint with Fix14D J4 extensions.
+// DEPENDENCY: must compile as part of the matching full NWNCX project;
+//             source overlay alone is not an independent executable.
+//
+// DESIGN / SAFETY INVARIANTS:
+//   The native mouse aiming path remains. Combat state has priority for red
+//   dot coloring; the pending-action square is absent while hit arcs remain
+//   separate from other action feedback.
+//
+// Provenance: base commit b4b43a54ed68, local mod
+// checkpoint 2470f0d27be0, subsequent C3C/D1-D5/R3/J4 overlays.
+// This header is explanatory only. The code from the source checkout
+// appears byte-for-byte below it after newline/BOM normalization.
+// END FIX14D-J4 PUBLICATION NOTES
+
 using System;
 using System.Runtime.InteropServices;
 using CX.Engine;
@@ -396,6 +414,7 @@ internal static class Crosshair
     private const float Bracket = 14f, BracketTick = 5f;
 
     private const byte FamPlain = 0, FamAttack = 1, FamTalk = 2, FamUse = 3, FamMagic = 4, FamHeal = 5, FamRefused = 6;
+    private const byte AiStateAttacking = 2;
 
     /// <summary>Cursor id -&gt; verb family. An odd id is a verb's "up" art and the next even one its pressed
     /// twin, so every verb is one pair; a <c>no&lt;verb&gt;</c> is its own following pair, not the even half.
@@ -448,6 +467,17 @@ internal static class Crosshair
         byte fam = (uint)id < (uint)Family.Length ? Family[id] : FamPlain;
         int k = fam * 4;
         float r = Tint[k], gr = Tint[k + 1], bl = Tint[k + 2], arms = Tint[k + 3];
+        // Cosmetic only: prioritize the game's local combat state over hover-verb tint.
+        // AI attacking also covers the attack edge before combat state arrives.
+        IntPtr playerPtr = CameraService.PlayerCreature();
+        if (playerPtr != IntPtr.Zero)
+        {
+            var player = new CNWCCreature(playerPtr);
+            if (player.CombatState != 0 || player.AiState == AiStateAttacking)
+            {
+                r = 1f; gr = 0.28f; bl = 0.22f;
+            }
+        }
         float s = Metrics.GameUiScale < 1f ? 1f : Metrics.GameUiScale;
         float cx = TextRig.ViewportW * 0.5f, cy = TextRig.ViewportH * 0.5f, a = Arm * s * arms, g = Gap * s, t = Thick * s * 0.5f;
         VertexBatch b = _batch ??= new VertexBatch(sheet.SolidU, sheet.SolidV);

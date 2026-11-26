@@ -1,6 +1,25 @@
+// BEGIN FIX14D-J4 PUBLICATION NOTES -- comments only; original source follows unchanged.
+// MODULE: managed/Services/Hotkeys/HotkeyServerLinkService.cs
+// PURPOSE: Inbound message timing observer
+// SOURCE: validated local NWNCX checkpoint with Fix14D J4 extensions.
+// DEPENDENCY: must compile as part of the matching full NWNCX project;
+//             source overlay alone is not an independent executable.
+//
+// DESIGN / SAFETY INVARIANTS:
+//   D4 observes player position immediately before/after existing inbound
+//   dispatch and returns the original result. No extra message hook or packet
+//   edits; zero delta in this window does not rule out queued application.
+//
+// Provenance: base commit b4b43a54ed68, local mod
+// checkpoint 2470f0d27be0, subsequent C3C/D1-D5/R3/J4 overlays.
+// This header is explanatory only. The code from the source checkout
+// appears byte-for-byte below it after newline/BOM normalization.
+// END FIX14D-J4 PUBLICATION NOTES
+
 using System.Runtime.InteropServices;
 using CX.Engine;
 using CX.Framework;
+using CX.Services.Camera;
 
 namespace CX.Services.Hotkeys;
 
@@ -63,7 +82,26 @@ public sealed unsafe class HotkeyServerLinkService : IExtenderService
                     return 1;
             }
         }
-        return _inboundOrig != null ? _inboundOrig(self, data, size) : 1;
+        // Fix 14D-D4 BEGIN: observe the EXISTING inbound dispatcher without changing its result.
+        long d4Begin = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool d4Window = CameraDriveService.D4TraceWindow(d4Begin, out int d4ReleaseId, out long d4ReleaseAt);
+        IntPtr d4Player = d4Window ? CameraService.PlayerCreature() : IntPtr.Zero;
+        System.Numerics.Vector3 d4Before = d4Player != IntPtr.Zero ? new CNWCObject(d4Player).Position : default;
+        uint d4Result = _inboundOrig != null ? _inboundOrig(self, data, size) : 1;
+        if (d4Window)
+        {
+            long d4End = System.Diagnostics.Stopwatch.GetTimestamp();
+            // Never dereference an object that may have been destroyed by a transition.
+            IntPtr d4Current = CameraService.PlayerCreature();
+            bool d4Same = d4Player != IntPtr.Zero && d4Current == d4Player;
+            System.Numerics.Vector3 d4After = d4Same ? new CNWCObject(d4Current).Position : default;
+            byte d4Major = data != null && size >= 3 && data[0] == FrameMarker ? data[1] : (byte)0xff;
+            byte d4Minor = data != null && size >= 3 && data[0] == FrameMarker ? data[2] : (byte)0xff;
+            CameraDriveService.D4TraceInbound(d4Begin, d4End, d4ReleaseId, d4ReleaseAt,
+                d4Major, d4Minor, size, d4Result, d4Before, d4After, d4Same);
+        }
+        // Fix 14D-D4 END.
+        return d4Result;
     }
 
     /// <summary>

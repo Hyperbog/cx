@@ -1,3 +1,21 @@
+// BEGIN FIX14D-J4 PUBLICATION NOTES -- comments only; original source follows unchanged.
+// MODULE: managed/Services/Camera/CameraKnobs.cs
+// PURPOSE: Camera and reticle configuration
+// SOURCE: validated local NWNCX checkpoint with Fix14D J4 extensions.
+// DEPENDENCY: must compile as part of the matching full NWNCX project;
+//             source overlay alone is not an independent executable.
+//
+// DESIGN / SAFETY INVARIANTS:
+//   Default dot reticle; combat-red presentation and optional feedback.
+//   Existing user cx.cfg values override defaults and must never be
+//   overwritten during publication.
+//
+// Provenance: base commit b4b43a54ed68, local mod
+// checkpoint 2470f0d27be0, subsequent C3C/D1-D5/R3/J4 overlays.
+// This header is explanatory only. The code from the source checkout
+// appears byte-for-byte below it after newline/BOM normalization.
+// END FIX14D-J4 PUBLICATION NOTES
+
 using CX.Framework;
 
 namespace CX.Services.Camera;
@@ -179,8 +197,8 @@ public sealed class CameraModeKnobs
             help: "Only hide your own head in first-person Driving mode. Body and equipment remain visible; other camera modes restore the head.");
         CleanReticle = G.Toggle("cleanreticle", "No target or attack squares", false, Tier.ChatOnly,
             help: "Hide the assist brackets and combat square; keep the contextual red crosshair and other feedback.");
-        HitMarker = G.Toggle("hitmarker", "Show target-damage marker", false, Tier.ChatOnly,
-            help: "Flash a white X when a damage number is reported on your current attack target. This cannot prove which party member caused the damage.");
+        HitMarker = G.Toggle("hitmarker", "Brief side arcs on target damage", true, Tier.ChatOnly,
+            help: "Flash two small side crescents around the dot when damage is reported on your current attack target. This cannot prove which party member caused the damage.");
         // OPTIONAL TEST ADD-ON: the Vulkan world colour pass omits this player's model.
         HideBody = G.Toggle("hidebody", "Hide local player model in first person", false, Tier.ChatOnly,
                             help: "Test option: hide your character's visible model and attachments only in the first-person Vulkan world view. Does not change movement or combat.");
@@ -197,10 +215,10 @@ public sealed class CameraModeKnobs
         AutoTarget = G.Toggle("autotarget", "Cast at the crosshair", true, Tier.Advanced,
                               help: "Under the action camera, a spell, feat or item that asks you to pick a target fires straight away on whatever the crosshair is pointing at, with no second click. A ground-targeted spell still asks you to aim it.");
         Feedback = G.Toggle("feedback", "Action feedback on the crosshair", true, Tier.ChatOnly,
-                            help: "Under the action camera, the crosshair answers what you did: a pulse when an order goes out, a red ring while you are attacking, and a dot underneath while an action is still waiting to happen.");
+                            help: "Under the action camera, the crosshair answers what you did: a pulse when an order goes out and an optional red ring while attacking. No indicator is drawn below the reticle for pending actions.");
         Reticle = G.Toggle("reticle", "Show first-person reticle", true, Tier.ChatOnly,
                            help: "Hide the reticle graphic but retain centred native mouse picking and actions.");
-        ReticleStyle = G.Slider("reticlestyle", "First-person reticle style", 0, 4, 1, 0, "", Tier.ChatOnly,
+        ReticleStyle = G.Slider("reticlestyle", "First-person reticle style", 0, 4, 1, 1, "", Tier.ChatOnly,
                                 help: "0 cross, 1 dot, 2 ring, 3 corners, 4 cross and ring.");
         HeadTrack = G.Toggle("headtrack", "Head follows the crosshair", true, Tier.Advanced,
                              help: "Under the action camera, your character turns their head toward whatever you are aiming at. The body still faces where it is walking. Only you see it -- other players see your character the way the game has always shown it.");

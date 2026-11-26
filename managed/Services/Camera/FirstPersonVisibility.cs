@@ -1,3 +1,21 @@
+// BEGIN FIX14D-J4 PUBLICATION NOTES -- comments only; original source follows unchanged.
+// MODULE: managed/Services/Camera/FirstPersonVisibility.cs
+// PURPOSE: Local player render visibility policy
+// SOURCE: validated local NWNCX checkpoint with Fix14D J4 extensions.
+// DEPENDENCY: must compile as part of the matching full NWNCX project;
+//             source overlay alone is not an independent executable.
+//
+// DESIGN / SAFETY INVARIANTS:
+//   C3C adaptive eye clearance avoids head/torso occlusion without
+//   indiscriminately hiding arms, feet, weapons or armor. Keep local-player
+//   identity and render-pass gates.
+//
+// Provenance: base commit b4b43a54ed68, local mod
+// checkpoint 2470f0d27be0, subsequent C3C/D1-D5/R3/J4 overlays.
+// This header is explanatory only. The code from the source checkout
+// appears byte-for-byte below it after newline/BOM normalization.
+// END FIX14D-J4 PUBLICATION NOTES
+
 using System;
 using System.Diagnostics;
 using System.Numerics;
@@ -29,6 +47,7 @@ internal static class FirstPersonVisibility
     // Camera solve publishes a stable versioned correction. The Alloy world
     // colour pass latches it once; no draw-thread creature or Gob dereferences.
     private static int _shiftSequence;
+    private static int _shiftCoreValidated;
     private static uint _shiftBody;
     private static float _shiftX, _shiftY, _shiftZ;
     private static long _shiftStamp;
@@ -77,13 +96,14 @@ internal static class FirstPersonVisibility
 
     /// <summary>Camera-thread publication after the FINAL wall constraint.
     /// Coordinates are a VISUAL offset only, not gameplay movement.</summary>
-    internal static void PublishEyeCollision(IntPtr creature, Vector3 delta)
+    internal static void PublishEyeCollision(IntPtr creature, Vector3 delta, bool validatedCore = false)
     {
         if (creature == IntPtr.Zero || !float.IsFinite(delta.X) || !float.IsFinite(delta.Y) || !float.IsFinite(delta.Z))
-            delta = Vector3.Zero;
+        { delta = Vector3.Zero; validatedCore = false; }
         uint body = Volatile.Read(ref _body);
         System.Threading.Interlocked.Increment(ref _shiftSequence);  // odd: writing
         Volatile.Write(ref _shiftBody, body);
+        Volatile.Write(ref _shiftCoreValidated, validatedCore ? 1 : 0);
         Volatile.Write(ref _shiftX, delta.X);
         Volatile.Write(ref _shiftY, delta.Y);
         Volatile.Write(ref _shiftZ, delta.Z);
@@ -125,6 +145,7 @@ internal static class FirstPersonVisibility
             {
                 uint who = Volatile.Read(ref _shiftBody);
                 float x = Volatile.Read(ref _shiftX), y = Volatile.Read(ref _shiftY), z = Volatile.Read(ref _shiftZ);
+                int coreValidated = Volatile.Read(ref _shiftCoreValidated);
                 long stamp = Volatile.Read(ref _shiftStamp);
                 if (a == Volatile.Read(ref _shiftSequence) && who == cameraFollow
                     && stamp != 0 && Stopwatch.GetTimestamp() - stamp < Stopwatch.Frequency / 5)
@@ -134,7 +155,10 @@ internal static class FirstPersonVisibility
                     if (float.IsFinite(len) && len > 0f)
                     {
                         float max = HeadBoneCamera.VisualShiftMax.V;
-                        if (len > max) { d *= max / len; _rejectedShifts++; }
+                        // Preserve the original wall-only cap. Only the same-frame,
+                        // solver-validated core pose may request a larger visual shift.
+                        if (coreValidated == 0 && len > max)
+                        { d *= max / len; _rejectedShifts++; }
                         _colorShift = d;
                         _colorShiftActive = true;
                         _renderShiftPasses++;

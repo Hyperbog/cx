@@ -1,3 +1,21 @@
+// BEGIN FIX14D-J4 PUBLICATION NOTES -- comments only; original source follows unchanged.
+// MODULE: managed/Alloy/AlloyRenderer.Batches.cs
+// PURPOSE: Local player render-pass isolation
+// SOURCE: validated local NWNCX checkpoint with Fix14D J4 extensions.
+// DEPENDENCY: must compile as part of the matching full NWNCX project;
+//             source overlay alone is not an independent executable.
+//
+// DESIGN / SAFETY INVARIANTS:
+//   First-person body clipping is addressed in visual rendering rather than
+//   by moving the authoritative creature. Preserve unrelated actors,
+//   non-color rendering passes and existing scene batches.
+//
+// Provenance: base commit b4b43a54ed68, local mod
+// checkpoint 2470f0d27be0, subsequent C3C/D1-D5/R3/J4 overlays.
+// This header is explanatory only. The code from the source checkout
+// appears byte-for-byte below it after newline/BOM normalization.
+// END FIX14D-J4 PUBLICATION NOTES
+
 using CX.Alloy.Db;
 using System;
 using System.Numerics;

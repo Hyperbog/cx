@@ -1,6 +1,26 @@
+// BEGIN FIX14D-J4 PUBLICATION NOTES -- comments only; original source follows unchanged.
+// MODULE: managed/Services/Camera/CameraDriveService.cs
+// PURPOSE: Camera-relative driving and release diagnostics
+// SOURCE: validated local NWNCX checkpoint with Fix14D J4 extensions.
+// DEPENDENCY: must compile as part of the matching full NWNCX project;
+//             source overlay alone is not an independent executable.
+//
+// DESIGN / SAFETY INVARIANTS:
+//   D1–D4 timing traces observe input, native drive state and movement
+//   messages. Never infer server acknowledgement from send return codes; keep
+//   movement speeds native.
+//
+// Provenance: base commit b4b43a54ed68, local mod
+// checkpoint 2470f0d27be0, subsequent C3C/D1-D5/R3/J4 overlays.
+// This header is explanatory only. The code from the source checkout
+// appears byte-for-byte below it after newline/BOM normalization.
+// END FIX14D-J4 PUBLICATION NOTES
+
 using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
+using System.Threading;
 using CX.Engine;
 using CX.Framework;
 using CX.Services.Nameplate;
@@ -89,6 +109,7 @@ public sealed unsafe class CameraDriveService : IExtenderService
         }
         var a = new CClientExoAppInternal(app);
         Span<int> keys = a.DriveKeys;
+        D2ObserveInput(a); // observer only, before the existing manual/native abort paths
         if (FreeCameraService.Active)
         {
             // The keys fly the camera; the engine sees none held (a drive under way is aborted, once).
@@ -229,7 +250,330 @@ public sealed unsafe class CameraDriveService : IExtenderService
         Span<int> keys = a.DriveKeys;
         Held = (a.DriveWalk | keys[Fwd] | keys[Back] | keys[StrafeL] | keys[StrafeR]) != 0;
         Fix14CProbe.Drive(Held, a.DriveWalk, keys[Fwd], keys[Back], keys[TurnL], keys[TurnR], keys[StrafeL], keys[StrafeR]);
+        DriveReleaseTraceSample trace = DriveReleaseTraceBefore(a);
+        D3StepSample d3 = D3Before(a); // observation only; do not alter native arguments
         _orig(app);
+        D3After(a, d3); // observe positional changes inside the original call
+        DriveReleaseTraceAfter(a, trace);
+    }
+
+    // Fix 14D-D2: observation-only lifecycle correlation. No extra sends, writes or hooks.
+    // Called before the original movement handler (including the existing explicit-abort arm).
+    private const int D2WireLimit = 1024;
+    private const int D2InputLimit = 256;
+    private static int _d2Mask, _d2ReleaseId, _d2WireCount, _d2InputCount;
+    private static bool _d2Ready;
+    private static long _d2ReleaseAt, _d2WindowEnd;
+
+    private static void D2ObserveInput(CClientExoAppInternal app)
+    {
+        if (_log == null || !_probeOk || CameraService.Mode != 2 ||
+            !CameraModes.Driving.FirstPerson.V)
+        {
+            _d2Ready = false;
+            Interlocked.Exchange(ref _d2WindowEnd, 0);
+            Interlocked.Exchange(ref _d2ReleaseAt, 0);
+            return;
+        }
+        int mask = DriveTraceMask(app);
+        long at = Stopwatch.GetTimestamp();
+        if (!_d2Ready)
+        {
+            _d2Ready = true;
+            _d2Mask = mask;
+            return;
+        }
+        if (mask == _d2Mask) return;
+        int prior = _d2Mask;
+        _d2Mask = mask;
+        bool released = prior != 0 && mask == 0;
+        if (released)
+        {
+            _d2ReleaseId++;
+            Interlocked.Exchange(ref _d2ReleaseAt, at);
+        }
+        else if (mask != 0)
+        {
+            Interlocked.Exchange(ref _d2ReleaseAt, 0);
+        }
+        Interlocked.Exchange(ref _d2WindowEnd, at + Stopwatch.Frequency * 3 / 2);
+        if (++_d2InputCount > D2InputLimit) return;
+        _log.Info(FormattableString.Invariant(
+            $"Fix14D-D2: input event={(released ? "release" : "change")} t={at} release_id={_d2ReleaseId} mask={prior}->{mask} policy={(_engineAborts ? "native" : "explicit-or-none")} active={(_active ? 1 : 0)} driving={D2DriveFlag(app)} lastsend={app.DriveLastSend} changed={app.DriveChanged}"));
+    }
+
+    private static int D2DriveFlag(CClientExoAppInternal app)
+    {
+        IntPtr creature = DriveTracePlayer(app);
+        return creature == IntPtr.Zero ? -1 : new CNWCCreature(creature).Driving;
+    }
+
+    // The existing ActionFeedback send-chain invokes this AFTER forwarding to its original.
+    // The return value belongs to the native send routine; it is NOT server acknowledgement.
+    internal static void D2ObserveSend(byte major, byte minor, uint bytes, int result,
+                                       long begin, long end)
+    {
+        if (major != 6 || _log == null || !_d2Ready) return;
+        long window = Interlocked.Read(ref _d2WindowEnd);
+        if (window == 0 || begin > window) return;
+        int line = Interlocked.Increment(ref _d2WireCount);
+        if (line > D2WireLimit) return;
+        long releaseAt = Interlocked.Read(ref _d2ReleaseAt);
+        double rel = releaseAt == 0 ? -1.0 : (begin - releaseAt) * 1000.0 / Stopwatch.Frequency;
+        _log.Info(FormattableString.Invariant(
+            $"Fix14D-D2: send t={begin} release_id={_d2ReleaseId} rel_ms={rel:F2} major=0x{major:X2} minor=0x{minor:X2} bytes={bytes} result={result} native_ms={(end - begin) * 1000.0 / Stopwatch.Frequency:F3} thread={Environment.CurrentManagedThreadId} count={line}/{D2WireLimit}"));
+    }
+
+    // Fix 14D-D4 BEGIN: passive inbound-dispatch correlation.
+    // No new hooks, position writes, drive messages, or prediction modifications.
+    // An inbound dispatch that leaves Position unchanged may still enqueue a later correction.
+    internal static bool D4TraceWindow(long at, out int releaseId, out long releaseAt)
+    {
+        releaseId = Volatile.Read(ref _d2ReleaseId);
+        releaseAt = Interlocked.Read(ref _d2ReleaseAt);
+        long until = Interlocked.Read(ref _d2WindowEnd);
+        return _log != null && _probeOk && _d2Ready && releaseAt > 0 &&
+            at >= releaseAt && at <= until && CameraService.Mode == 2 &&
+            CameraModes.Driving.FirstPerson.V;
+    }
+
+    private const int D4InboundLimit = 1800;
+    private static int _d4InboundCount;
+    internal static void D4TraceInbound(long begin, long end, int releaseId, long releaseAt,
+        byte major, byte minor, uint size, uint result, Vector3 before, Vector3 after,
+        bool samePlayer)
+    {
+        if (_log == null) return;
+        int count = Interlocked.Increment(ref _d4InboundCount);
+        if (count > D4InboundLimit) return;
+        float dx = after.X - before.X, dy = after.Y - before.Y;
+        float xy = samePlayer ? MathF.Sqrt(dx * dx + dy * dy) : 0f;
+        if (!float.IsFinite(xy)) return;
+        _log.Info(FormattableString.Invariant(
+            $"Fix14D-D4: inbound t={begin} release_id={releaseId} rel_ms={(begin - releaseAt) * 1000.0 / Stopwatch.Frequency:F2} major=0x{major:X2} minor=0x{minor:X2} bytes={size} result={result} native_ms={(end - begin) * 1000.0 / Stopwatch.Frequency:F3} same_player={(samePlayer ? 1 : 0)} pre={before.X:F4},{before.Y:F4} post={after.X:F4},{after.Y:F4} delta_xy={xy:F5} thread={Environment.CurrentManagedThreadId} count={count}/{D4InboundLimit}"));
+    }
+    // Fix 14D-D4 END.
+
+    // Fix 14D-D3 BEGIN: passive native-step boundary observer. No input, send, or world writes.
+    // 'Outside' is movement between calls to UpdateDriveMode; it is NOT proof of a server correction.
+    // 'Inside' is movement during the original UpdateDriveMode call; it is NOT proof of prediction.
+    private const int D3TraceLimit = 700;
+    private static int _d3TraceCount, _d3LastReleaseId;
+    private static long _d3LastLogAt, _d3PreviousPostAt;
+    private static bool _d3PreviousValid;
+    private static IntPtr _d3PreviousCreature;
+    private static Vector3 _d3PreviousPost;
+    private static double _d3OutsideXY, _d3InsideXY;
+    private static float _d3OutsideMax, _d3InsideMax;
+
+    private struct D3StepSample
+    {
+        internal bool Enabled, Window;
+        internal IntPtr Creature;
+        internal Vector3 Before;
+        internal long At, SendBefore;
+        internal int ReleaseId, Mask, DriveBefore, ChangedBefore;
+    }
+
+    private static D3StepSample D3Before(CClientExoAppInternal app)
+    {
+        D3StepSample sample = default;
+        if (_log == null || !_probeOk || CameraService.Mode != 2 ||
+            !CameraModes.Driving.FirstPerson.V)
+        {
+            _d3PreviousValid = false;
+            return sample;
+        }
+        sample.Creature = DriveTracePlayer(app);
+        if (sample.Creature == IntPtr.Zero)
+        {
+            _d3PreviousValid = false;
+            return sample;
+        }
+        sample.Enabled = true;
+        sample.At = Stopwatch.GetTimestamp();
+        sample.Before = new CNWCObject(sample.Creature).Position;
+        sample.Mask = DriveTraceMask(app);
+        sample.DriveBefore = new CNWCCreature(sample.Creature).Driving;
+        sample.ChangedBefore = app.DriveChanged;
+        sample.SendBefore = app.DriveLastSend;
+        sample.ReleaseId = _d2ReleaseId;
+        long releaseAt = Interlocked.Read(ref _d2ReleaseAt);
+        sample.Window = releaseAt > 0 && sample.Mask == 0 &&
+            sample.At >= releaseAt && sample.At - releaseAt < Stopwatch.Frequency * 3 / 2;
+
+        if (sample.ReleaseId != _d3LastReleaseId)
+        {
+            _d3LastReleaseId = sample.ReleaseId;
+            _d3LastLogAt = 0;
+            _d3OutsideXY = _d3InsideXY = 0;
+            _d3OutsideMax = _d3InsideMax = 0f;
+        }
+        if (sample.Window && _d3PreviousValid &&
+            _d3PreviousCreature == sample.Creature && sample.At >= _d3PreviousPostAt)
+        {
+            Vector3 delta = sample.Before - _d3PreviousPost;
+            float magnitude = MathF.Sqrt(delta.X * delta.X + delta.Y * delta.Y);
+            if (float.IsFinite(magnitude))
+            {
+                _d3OutsideXY += magnitude;
+                _d3OutsideMax = MathF.Max(_d3OutsideMax, magnitude);
+            }
+        }
+        return sample;
+    }
+
+    private static void D3After(CClientExoAppInternal app, D3StepSample sample)
+    {
+        if (!sample.Enabled) return;
+        // A local-character replacement invalidates any preceding position history.
+        bool same = DriveTracePlayer(app) == sample.Creature;
+        if (!same)
+        {
+            _d3PreviousValid = false;
+            return;
+        }
+        Vector3 after = new CNWCObject(sample.Creature).Position;
+        int driveAfter = new CNWCCreature(sample.Creature).Driving;
+        long now = Stopwatch.GetTimestamp();
+        _d3PreviousCreature = sample.Creature;
+        _d3PreviousPost = after;
+        _d3PreviousPostAt = now;
+        _d3PreviousValid = true;
+        if (!sample.Window || _d3TraceCount >= D3TraceLimit) return;
+
+        Vector3 delta = after - sample.Before;
+        float inside = MathF.Sqrt(delta.X * delta.X + delta.Y * delta.Y);
+        if (float.IsFinite(inside))
+        {
+            _d3InsideXY += inside;
+            _d3InsideMax = MathF.Max(_d3InsideMax, inside);
+        }
+        if (_d3LastLogAt != 0 && now - _d3LastLogAt < Stopwatch.Frequency / 20)
+            return;
+        long releaseAt = Interlocked.Read(ref _d2ReleaseAt);
+        double rel = releaseAt > 0 ? (now - releaseAt) * 1000.0 / Stopwatch.Frequency : -1.0;
+        _d3LastLogAt = now;
+        _d3TraceCount++;
+        _log?.Info(FormattableString.Invariant(
+            $"Fix14D-D3: t={now} release_id={sample.ReleaseId} rel_ms={rel:F1} mask={sample.Mask} drive={sample.DriveBefore},{driveAfter} changed={sample.ChangedBefore},{app.DriveChanged} lastsend={sample.SendBefore},{app.DriveLastSend} outside_xy={_d3OutsideXY:F5} inside_xy={_d3InsideXY:F5} outside_max={_d3OutsideMax:F5} inside_max={_d3InsideMax:F5} pre={sample.Before.X:F4},{sample.Before.Y:F4} post={after.X:F4},{after.Y:F4} count={_d3TraceCount}/{D3TraceLimit}"));
+        _d3OutsideXY = _d3InsideXY = 0;
+        _d3OutsideMax = _d3InsideMax = 0f;
+    }
+    // Fix 14D-D3 END.
+
+    // Fix 14D-D1: passive release timing observer. NEVER modifies a drive slot, packet or creature.
+    // Stopwatch time is monotonic and high resolution; these are engine-facing keys, not OS events.
+    private const int DriveTraceMaxLines = 2000;
+    private static int _driveTraceMask, _driveTraceLines;
+    private static long _driveTraceUntil, _driveTraceSampleAt, _driveTraceReleaseAt;
+    private static long _driveTracePreviousAt;
+    private static Vector3 _driveTracePreviousPosition;
+    private static bool _driveTracePreviousValid;
+
+    private struct DriveReleaseTraceSample
+    {
+        internal bool Enabled, HasCreature, IsRelease;
+        internal string Event;
+        internal long Tick, SendBefore;
+        internal int ChangedBefore, DrivingBefore, Mask, AbortCount;
+        internal Vector3 PositionBefore;
+        internal IntPtr Creature;
+    }
+
+    private static int DriveTraceMask(CClientExoAppInternal a)
+    {
+        Span<int> k = a.DriveKeys;
+        return (a.DriveWalk != 0 ? 1 : 0) |
+               (k[Fwd] != 0 ? 2 : 0) | (k[Back] != 0 ? 4 : 0) |
+               (k[TurnL] != 0 ? 8 : 0) | (k[TurnR] != 0 ? 16 : 0) |
+               (k[StrafeL] != 0 ? 32 : 0) | (k[StrafeR] != 0 ? 64 : 0);
+    }
+
+    private static IntPtr DriveTracePlayer(CClientExoAppInternal a)
+    {
+        // Identical pointer chain already used by Wanted(); no new native calls or symbol offsets.
+        if (_appMgr == IntPtr.Zero || CameraService.Module() == IntPtr.Zero) return IntPtr.Zero;
+        IntPtr manager = *(IntPtr*)_appMgr;
+        if (manager == IntPtr.Zero) return IntPtr.Zero;
+        IntPtr exo = *(IntPtr*)manager;
+        if (exo == IntPtr.Zero) return IntPtr.Zero;
+        IntPtr creature = _getGameObject(exo, a.PlayerCreatureId);
+        return creature != IntPtr.Zero && new CNWCObject(creature).Type == NameplateNative.TypeCreature
+            ? creature : IntPtr.Zero;
+    }
+
+    private static DriveReleaseTraceSample DriveReleaseTraceBefore(CClientExoAppInternal a)
+    {
+        DriveReleaseTraceSample sample = default;
+        if (_log == null || !_probeOk || CameraService.Mode != 2 ||
+            !CameraModes.Driving.FirstPerson.V || _driveTraceLines >= DriveTraceMaxLines)
+        {
+            _driveTraceMask = 0;
+            _driveTraceUntil = 0;
+            _driveTracePreviousValid = false;
+            return sample;
+        }
+        long now = Stopwatch.GetTimestamp();
+        int mask = DriveTraceMask(a);
+        bool released = _driveTraceMask != 0 && mask == 0;
+        bool edge = mask != _driveTraceMask;
+        if (edge)
+        {
+            _driveTraceUntil = now + Stopwatch.Frequency * 3 / 2; // 1500 ms after last transition
+            if (released) _driveTraceReleaseAt = now;
+        }
+        _driveTraceMask = mask;
+        if (!edge && (now >= _driveTraceUntil ||
+                      now - _driveTraceSampleAt < Stopwatch.Frequency / 20)) return sample;
+        if (now - _driveTracePreviousAt > Stopwatch.Frequency / 2)
+            _driveTracePreviousValid = false; // discard stale cross-trial displacement
+        _driveTraceSampleAt = now;
+        sample.Enabled = true;
+        sample.Tick = now;
+        sample.Mask = mask;
+        sample.IsRelease = released;
+        sample.Event = released ? "release" : edge ? "key-change" : "followup";
+        sample.SendBefore = a.DriveLastSend;
+        sample.ChangedBefore = a.DriveChanged;
+        sample.AbortCount = _aborts;
+        sample.Creature = DriveTracePlayer(a);
+        sample.HasCreature = sample.Creature != IntPtr.Zero;
+        if (sample.HasCreature)
+        {
+            sample.PositionBefore = new CNWCObject(sample.Creature).Position;
+            sample.DrivingBefore = new CNWCCreature(sample.Creature).Driving;
+        }
+        return sample;
+    }
+
+    private static void DriveReleaseTraceAfter(CClientExoAppInternal a, DriveReleaseTraceSample sample)
+    {
+        if (!sample.Enabled || _log == null) return;
+        long end = Stopwatch.GetTimestamp();
+        int drivingAfter = -1;
+        Vector3 positionAfter = default;
+        // Re-resolve across the native call: a transition can replace the local creature.
+        bool sameCreature = sample.HasCreature && DriveTracePlayer(a) == sample.Creature;
+        if (sameCreature)
+        {
+            positionAfter = new CNWCObject(sample.Creature).Position;
+            drivingAfter = new CNWCCreature(sample.Creature).Driving;
+        }
+        double dt = _driveTracePreviousValid && sameCreature
+            ? (sample.Tick - _driveTracePreviousAt) * 1000.0 / Stopwatch.Frequency : 0.0;
+        float dx = _driveTracePreviousValid && sameCreature
+            ? positionAfter.X - _driveTracePreviousPosition.X : 0f;
+        float dy = _driveTracePreviousValid && sameCreature
+            ? positionAfter.Y - _driveTracePreviousPosition.Y : 0f;
+        // Only the observer's own history is updated. Zero impact on game movement.
+        _driveTracePreviousValid = sameCreature;
+        _driveTracePreviousAt = sample.Tick;
+        _driveTracePreviousPosition = positionAfter;
+        double sinceReleaseMs = _driveTraceReleaseAt > 0
+            ? (sample.Tick - _driveTraceReleaseAt) * 1000.0 / Stopwatch.Frequency : -1.0;
+        _driveTraceLines++;
+        _log.Info(FormattableString.Invariant($"Fix14D-D1: event={sample.Event} t={sample.Tick} release_ms={sinceReleaseMs:F1} mask={sample.Mask} held={(Held ? 1 : 0)} mode={CameraService.Mode} policy={(_engineAborts ? "native" : "explicit-or-none")} drive={sample.DrivingBefore},{drivingAfter} changed={sample.ChangedBefore},{a.DriveChanged} lastsend={sample.SendBefore},{a.DriveLastSend} aborts={sample.AbortCount},{_aborts} msg={(ClientApi.Message() == IntPtr.Zero ? 0 : 1)} same_creature={(sameCreature ? 1 : 0)} pos={positionAfter.X:F3},{positionAfter.Y:F3},{positionAfter.Z:F3} dxy={dx:F3},{dy:F3} dt_ms={dt:F1} native_ms={(end - sample.Tick) * 1000.0 / Stopwatch.Frequency:F2} samples={_driveTraceLines}/{DriveTraceMaxLines}"));
     }
 
     /// <summary>The forward slots the engine is handed (run = <see cref="EngineLayout.InternalDriveKeys"/>[0], walk =

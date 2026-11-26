@@ -1,3 +1,21 @@
+// BEGIN FIX14D-J4 PUBLICATION NOTES -- comments only; original source follows unchanged.
+// MODULE: managed/Services/Camera/StepGuardService.cs
+// PURPOSE: Native movement/position observer
+// SOURCE: validated local NWNCX checkpoint with Fix14D J4 extensions.
+// DEPENDENCY: must compile as part of the matching full NWNCX project;
+//             source overlay alone is not an independent executable.
+//
+// DESIGN / SAFETY INVARIANTS:
+//   D5 records pre/post WalkUpdateLocation position changes while leaving the
+//   StepGuard correction decision untouched. A native drive flag by itself
+//   does not prove displacement.
+//
+// Provenance: base commit b4b43a54ed68, local mod
+// checkpoint 2470f0d27be0, subsequent C3C/D1-D5/R3/J4 overlays.
+// This header is explanatory only. The code from the source checkout
+// appears byte-for-byte below it after newline/BOM normalization.
+// END FIX14D-J4 PUBLICATION NOTES
+
 using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -64,7 +82,18 @@ public sealed unsafe class StepGuardService : IExtenderService
 
         ref Vector3 desired = ref creature.DesiredPos;
         Vector3 before = desired;
+        // Fix14D-D5 OBSERVER BEGIN: pre-native position capture; no engine writes.
+        long d5Start = System.Diagnostics.Stopwatch.GetTimestamp();
+        bool d5Watch = CameraDriveService.D4TraceWindow(d5Start, out int d5ReleaseId, out long d5ReleaseAt);
+        Vector3 d5PlayerBefore = d5Watch ? new CNWCObject(cre).Position : default;
+        int d5DrivingBefore = d5Watch ? creature.Driving : 0;
+        // Fix14D-D5 OBSERVER END.
         int r = (*_next)(cre);
+        // Fix14D-D5 OBSERVER BEGIN: sample the existing original call.
+        if (d5Watch)
+            D5Trace("native", d5Start, d5ReleaseAt, d5ReleaseId, d5PlayerBefore,
+                new CNWCObject(cre).Position, before, desired, d5DrivingBefore, creature.Driving, r);
+        // Fix14D-D5 OBSERVER END.
         Vector3 after = desired;
         Fix14CProbe.Step(cre, before, after, creature.Driving);
         if (!IsStep(before, after) || new CNWCModule(module).CurrentArea.Ptr != area.Ptr) return r;
@@ -76,12 +105,41 @@ public sealed unsafe class StepGuardService : IExtenderService
         if (clear == 1) { _steps++; return r; }
         desired = before;
         creature.SetPosition(VectorArg.Of(&from));
+        // Fix14D-D5 OBSERVER BEGIN: sample the existing StepGuard correction.
+        if (d5Watch)
+            D5Trace("guard", d5Start, d5ReleaseAt, d5ReleaseId, d5PlayerBefore,
+                new CNWCObject(cre).Position, before, desired, d5DrivingBefore, creature.Driving, r);
+        // Fix14D-D5 OBSERVER END.
         if (creature.Driving != 0) _driveRefusals++; else _walkRefusals++;
         return r;
     }
 
     /// <summary>The engine's own <c>Vector</c> shape, which the by-value call arguments need.</summary>
     private static Vec3 Vec(in Vector3 v) => new() { X = v.X, Y = v.Y, Z = v.Z };
+
+    // Fix14D-D5 OBSERVER BEGIN: bounded logging in D4's existing post-release window.
+    private const int D5Limit = 1000;
+    private static int _d5Count;
+    private static void D5Trace(string phase, long begin, long releasedAt, int id,
+        Vector3 p0, Vector3 p1, Vector3 d0, Vector3 d1, int driving0, int driving1, int result)
+    {
+        if (_log == null || _d5Count >= D5Limit) return;
+        float dx = p1.X - p0.X, dy = p1.Y - p0.Y;
+        float dwx = d1.X - d0.X, dwy = d1.Y - d0.Y;
+        int count = ++_d5Count;
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        double tickMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        // Keep each interpolation a FormattableString before concatenating the log text.
+        // Concatenating first produces string, which FormattableString.Invariant cannot accept.
+        _log.Info(
+            FormattableString.Invariant($"Fix14D-D5: phase={phase} release_id={id} t={begin} rel_ms={(begin - releasedAt) * tickMs:F2} ") +
+            FormattableString.Invariant($"elapsed_ms={(now - begin) * tickMs:F3} native_result={result} drive={driving0},{driving1} ") +
+            FormattableString.Invariant($"pos_pre={p0.X:F5},{p0.Y:F5},{p0.Z:F5} pos_post={p1.X:F5},{p1.Y:F5},{p1.Z:F5} ") +
+            FormattableString.Invariant($"delta_xy={MathF.Sqrt(dx*dx+dy*dy):F5} desired_pre={d0.X:F5},{d0.Y:F5} ") +
+            FormattableString.Invariant($"desired_post={d1.X:F5},{d1.Y:F5} desired_delta_xy={MathF.Sqrt(dwx*dwx+dwy*dwy):F5} ") +
+            FormattableString.Invariant($"thread={Environment.CurrentManagedThreadId} count={count}/{D5Limit}"));
+    }
+    // Fix14D-D5 OBSERVER END.
 
     /// <summary>A walk step moved the desired point and by less than <see cref="MaxStep"/> in the plane; anything
     /// else (unchanged, or a server rewrite) is not a step to test.</summary>

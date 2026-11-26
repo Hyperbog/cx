@@ -1,5 +1,24 @@
+// BEGIN FIX14D-J4 PUBLICATION NOTES -- comments only; original source follows unchanged.
+// MODULE: managed/Services/Camera/ActionFeedback.cs
+// PURPOSE: Damage feedback and reticle hit crescents
+// SOURCE: validated local NWNCX checkpoint with Fix14D J4 extensions.
+// DEPENDENCY: must compile as part of the matching full NWNCX project;
+//             source overlay alone is not an independent executable.
+//
+// DESIGN / SAFETY INVARIANTS:
+//   Reticle displays a centered dot and two compact side arcs for 160 ms on a
+//   selected-target damage event. The event is not guaranteed to identify
+//   which actor caused damage. No new combat packet is sent.
+//
+// Provenance: base commit b4b43a54ed68, local mod
+// checkpoint 2470f0d27be0, subsequent C3C/D1-D5/R3/J4 overlays.
+// This header is explanatory only. The code from the source checkout
+// appears byte-for-byte below it after newline/BOM normalization.
+// END FIX14D-J4 PUBLICATION NOTES
+
 using System;
 using System.Runtime.InteropServices;
+using System.Diagnostics;
 using CX.Engine;
 using CX.Framework;
 using CX.Services.Chat.Core;
@@ -18,7 +37,7 @@ internal static unsafe class ActionFeedback
     private static bool _ready;
     private sealed class HitMarkState { internal long Last; }
     private static readonly HitMarkState HitMark = new();
-    private const long HitMarkerMs = 180;
+    private const long HitMarkerMs = 160;
     private static SendPlayerToServerMessageFn* _next;
 
     // ---- the wire frame ----
@@ -58,8 +77,8 @@ internal static unsafe class ActionFeedback
     /// <summary>How long the "order sent" pulse lives, and the radii it travels between.</summary>
     private const long PulseMs = 350;
     private const float PulseFrom = 6f, PulseTo = 22f, PulseTick = 7f;
-    /// <summary>Half-size of the persistent "attacking" square ring, and the pending dot's size and drop.</summary>
-    private const float AttackRing = 17f, DotHalf = 1.6f, DotDrop = 15f;
+    /// <summary>Half-size of the optional persistent attack ring.</summary>
+    private const float AttackRing = 17f;
     /// <summary>The attack red, the same verb colour the reticle takes from the attack cursor.</summary>
     private const float AttackR = 1f, AttackG = 0.28f, AttackB = 0.22f;
 
@@ -82,7 +101,12 @@ internal static unsafe class ActionFeedback
     private static int OnSend(IntPtr self, byte major, byte minor, byte* buf, uint len)
     {
         if (buf != null && (major == MajorInput || major == MajorGroupInput)) Latch(minor, buf, len);
-        return (*_next)(self, major, minor, buf, len);
+        // D2: pass through the existing native send hook exactly once, unchanged.
+        long d2Begin = major == MajorInput ? Stopwatch.GetTimestamp() : 0;
+        int result = (*_next)(self, major, minor, buf, len);
+        if (d2Begin != 0)
+            CameraDriveService.D2ObserveSend(major, minor, len, result, d2Begin, Stopwatch.GetTimestamp());
+        return result;
     }
 
     private static void Latch(byte minor, byte* buf, uint len)
@@ -141,12 +165,12 @@ internal static unsafe class ActionFeedback
 
     // ---- the per-frame read + draw ----
 
-    /// <summary>What the crosshair adds: a pulse on a fresh order, a red ring while the player is attacking, a
-    /// dot while the action queue still holds something. Runs inside <see cref="Crosshair"/>'s own batch, so it
-    /// costs no extra draw call; three engine field reads and at most nine rects, no allocation.</summary>
+    /// <summary>Optional order pulse, attack ring and short damage crescents inside the reticle batch.
+    /// Pending action count is still tracked for reports, but no square is drawn below the dot.
+    /// Native targeting and combat behavior are unchanged.</summary>
     internal static void Draw(VertexBatch b, float cx, float cy, float s, float t)
     {
-        if (!_ready || !MouseLook.Feedback.V) return;
+        if (!_ready || (!MouseLook.Feedback.V && !CameraModes.Driving.HitMarker.V)) return;
         int queued = Pending();
         IntPtr cre = CameraService.PlayerCreature();
         var creature = new CNWCCreature(cre);
@@ -156,7 +180,7 @@ internal static unsafe class ActionFeedback
         _aiTarget = attacking ? creature.AiTarget : 0u;
 
         long age = Environment.TickCount64 - _at;
-        if (_at != 0 && (ulong)age < PulseMs)
+        if (MouseLook.Feedback.V && _at != 0 && (ulong)age < PulseMs)
         {
             float p = age / (float)PulseMs;
             float d = (PulseFrom + (PulseTo - PulseFrom) * p) * s, half = PulseTick * s * 0.5f, al = (1f - p) * 0.85f;
@@ -165,7 +189,7 @@ internal static unsafe class ActionFeedback
             b.Rect(cx - d - t, cy - half, cx - d + t, cy + half, 1f, 1f, 1f, al);
             b.Rect(cx + d - t, cy - half, cx + d + t, cy + half, 1f, 1f, 1f, al);
         }
-        if (attacking && !CameraModes.Driving.CleanReticle.V)
+        if (MouseLook.Feedback.V && attacking && !CameraModes.Driving.CleanReticle.V)
             Ring(b, cx, cy, AttackRing * s, t, AttackR, AttackG, AttackB, 0.55f);
         if (CameraModes.Driving.HitMarker.V)
         {
@@ -173,18 +197,36 @@ internal static unsafe class ActionFeedback
             long ms = Environment.TickCount64 - hitAt;
             if (hitAt != 0 && ms >= 0 && ms < HitMarkerMs)
             {
-                // Four small corner-free white hit ticks: distinct from attack colour and aim brackets.
-                float d = 7f * s, w = 2f * s, a = (1f - ms / (float)HitMarkerMs) * 0.95f;
-                b.Rect(cx - d - w, cy - d - w, cx - d + w, cy - d + w, 1f, 1f, 1f, a);
-                b.Rect(cx + d - w, cy - d - w, cx + d + w, cy - d + w, 1f, 1f, 1f, a);
-                b.Rect(cx - d - w, cy + d - w, cx - d + w, cy + d + w, 1f, 1f, 1f, a);
-                b.Rect(cx + d - w, cy + d - w, cx + d + w, cy + d + w, 1f, 1f, 1f, a);
+                // Fix14D-R1: only the left/right shoulders of a small circle flash around the dot.
+                // Keep the top and bottom entirely open. The hit timestamp is target-damage,
+                // not proven local-player damage (the inbound event does not name an attacker).
+                float fade = 1f - ms / (float)HitMarkerMs;
+                HitCrescents(b, cx, cy, s, fade * fade * 0.95f);
             }
         }
-        if (queued > 0)
+    }
+
+    /// <summary>Brief, symmetric side arcs, shaped like ( dot ). Center and vertical gaps stay clear.
+    /// Uses solid atlas rectangles, matching Crosshair's existing rounded-by-sampling ring technique.
+    /// Nothing allocates or changes the native picking/attack state.</summary>
+    private static void HitCrescents(VertexBatch b, float cx, float cy, float scale, float alpha)
+    {
+        const int steps = 9;
+        float radius = 9f * scale, half = 1.05f * scale, shadow = 0.5f * scale;
+        for (int side = 0; side != 2; side++)
         {
-            float k = DotHalf * s, y = cy + DotDrop * s;
-            b.Rect(cx - k, y - k, cx + k, y + k, 1f, 1f, 1f, 0.8f);
+            for (int i = 0; i < steps; i++)
+            {
+                // +/-55 degrees at the right, then rotate 180 degrees for the left.
+                // No samples near +/-90 degrees: no top/bottom arc.
+                float degrees = -55f + i * (110f / (steps - 1)) + side * 180f;
+                float angle = degrees * (MathF.PI / 180f);
+                float x = cx + MathF.Cos(angle) * radius;
+                float y = cy + MathF.Sin(angle) * radius;
+                b.Rect(x - half - shadow, y - half - shadow, x + half + shadow,
+                       y + half + shadow, 0f, 0f, 0f, alpha * 0.45f);
+                b.Rect(x - half, y - half, x + half, y + half, AttackR, AttackG, AttackB, alpha);
+            }
         }
     }
 

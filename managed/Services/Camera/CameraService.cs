@@ -1,3 +1,21 @@
+// BEGIN FIX14D-J4 PUBLICATION NOTES -- comments only; original source follows unchanged.
+// MODULE: managed/Services/Camera/CameraService.cs
+// PURPOSE: First-person camera orchestration
+// SOURCE: validated local NWNCX checkpoint with Fix14D J4 extensions.
+// DEPENDENCY: must compile as part of the matching full NWNCX project;
+//             source overlay alone is not an independent executable.
+//
+// DESIGN / SAFETY INVARIANTS:
+//   Animated head-eye synchronization, locomotion/attack behavior and C3C
+//   local player clearance. The render-only model retreat is restricted to
+//   the local first-person view; native world creature position is unchanged.
+//
+// Provenance: base commit b4b43a54ed68, local mod
+// checkpoint 2470f0d27be0, subsequent C3C/D1-D5/R3/J4 overlays.
+// This header is explanatory only. The code from the source checkout
+// appears byte-for-byte below it after newline/BOM normalization.
+// END FIX14D-J4 PUBLICATION NOTES
+
 using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -115,6 +133,7 @@ public sealed unsafe class CameraService : IExtenderService
         KnobSurface.Note(Report);
         KnobSurface.Note(FirstPersonVisibility.Diagnostics);
         FirstPersonModelProbe.Attach(log);
+        UniversalEyeClearance.Configure(log);
         KnobSurface.Note(AttackCameraFollow.Diagnostics);
         KnobSurface.Note(FirstPersonWorldGuard.Diagnostics);
         KnobSurface.Note(HeadBoneCamera.Diagnostics);
@@ -370,7 +389,8 @@ public sealed unsafe class CameraService : IExtenderService
         HeadBoneCamera.MaintainHeadClearance(player, ref eye, q);
         HeadBoneCamera.KeepMovementModelBehindEye(player, dt, ref eye, q);
         FirstPersonWorldGuard.Resolve(player, ref eye, q);
-        FirstPersonVisibility.PublishEyeCollision(player, FirstPersonWorldGuard.LastEyeCorrection);
+        Vector3 localVisualCorrection = UniversalEyeClearance.Apply(player, eye, q, FirstPersonWorldGuard.LastEyeCorrection, out bool validatedCore);
+        FirstPersonVisibility.PublishEyeCollision(player, localVisualCorrection, validatedCore);
                 c.Place(eye, q);
                 _pos = eye;
                 _offsetOn = false;
