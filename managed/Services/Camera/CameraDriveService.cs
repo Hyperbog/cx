@@ -132,7 +132,7 @@ public sealed unsafe class CameraDriveService : IExtenderService
         int liveMode = CameraService.Mode;
         // In first-person, turn-key slots are strafes; mouse-look alone owns yaw.
         bool firstPersonStrafe = liveMode == 2 && CameraModes.Driving.FirstPersonActive
-            && MouseLookService.ActionHeld;
+            && MouseLook.ActionEnabled;
         bool face = firstPersonStrafe || (liveMode >= 0 && CameraModes.ByMode[liveMode].FacingActive);
         // Side run: a turn key under <mode>.siderun, or any side key while locked on a target, runs the
         // creature sideways facing where it runs -- no orbit for the turn keys, no held facing to strafe under.

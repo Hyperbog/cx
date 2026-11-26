@@ -58,8 +58,6 @@ public sealed unsafe class MouseLookService : IExtenderService
     private static int _looks, _clicks, _actions;
     /// <summary>Action camera held (relative mode ours) and the centre the events are pinned to.</summary>
     private static bool _action;
-    // Driving begins in aiming mode; shortcut temporarily releases cursor without cfg writes.
-    internal static bool DrivingActionEnabled { get; private set; } = true;
     // One toggle lifecycle, no re-level on Alt releases or UI focus changes.
     private static class EntryPitchState
     {
@@ -116,8 +114,8 @@ public sealed unsafe class MouseLookService : IExtenderService
         _next = hooks.ChainWinMessageHandler(&OnWinMessage, 100);
         if (_next == null) { log.Info("MouseLook: standing down (WinMessageHandler chain refused)"); return; }
         _held = (byte*)NativeMemory.AllocZeroed(SdlEventSize);
-        log.Info(!MouseLook.Enabled.V ? "MouseLook: chained, this mode's mouselook=0 -- the stock middle-drag runs until it is turned on"
-            : MouseLook.Right.V
+        log.Info(!MouseLook.LookEnabled ? "MouseLook: chained, this mode's mouselook=0 -- the stock middle-drag runs until it is turned on"
+            : MouseLook.RightEnabled
             ? $"MouseLook: right-drag orbits (sensitivity {MouseLook.Sens.V}, invert {MouseLook.Invert.V}, threshold {MouseLook.Threshold.V}px); radial menu = a still right-click; middle-drag captured"
             : "MouseLook: middle-drag captured (cursor held in place); right-drag off (opt in with the mode's Right-drag row)");
     }
@@ -126,10 +124,10 @@ public sealed unsafe class MouseLookService : IExtenderService
     private static int OnWinMessage(IntPtr ev)
     {
         if (ev == IntPtr.Zero) return Forward(ev);
-        if (!MouseLook.Enabled.V) { if (_state != State.Idle) Release(); return Forward(ev); }
+        if (!MouseLook.LookEnabled) { if (_action) SetAction(false); if (_state != State.Idle) Release(); return Forward(ev); }
         // Toggle the gameplay cursor with Z. Alt remains available as a quickbar modifier.
         // Do not intercept text entry in a dialogue, chat or focused CX window.
-        if (MouseLook.AltToggle.V && ActionGateOpen() && *(uint*)ev == SdlKeyDown &&
+        if ((CameraService.Mode == 2 || MouseLook.AltToggle.V) && ActionGateOpen() && *(uint*)ev == SdlKeyDown &&
             ((SdlEvent*)ev)->SymU == (uint)'z')
         {
             if (((SdlEvent*)ev)->Repeat == 0) _altFree = !_altFree;
@@ -137,7 +135,7 @@ public sealed unsafe class MouseLookService : IExtenderService
             if (capture != _action) SetAction(capture);
             return 0;
         }
-        if (MouseLook.AltToggle.V && MouseLook.ActionEnabled && GameGate.InGame &&
+        if ((CameraService.Mode == 2 || MouseLook.AltToggle.V) && MouseLook.ActionEnabled && GameGate.InGame &&
             !UiHost.AnyKeyboardOwner && *(uint*)ev == 0x301 &&
             ((SdlEvent*)ev)->SymU == (uint)'z') return 0; // SDL_KEYUP
         bool want = ActionWanted();
@@ -149,7 +147,7 @@ public sealed unsafe class MouseLookService : IExtenderService
         {
             case SdlMouseDown:
                 byte b = ((SdlEvent*)ev)->Button;
-                if (_state != State.Idle || (b != SdlButtonMiddle && !(b == SdlButtonRight && MouseLook.Right.V))) break;
+                if (_state != State.Idle || (b != SdlButtonMiddle && !(b == SdlButtonRight && MouseLook.RightEnabled))) break;
                 int mx = ((SdlEvent*)ev)->X, my = ((SdlEvent*)ev)->Y;
                 if (UiInputService.EngineGuiWantsPress() || UiHost.HitTest(mx, my) != null) break;   // the GUI's press
                 _originX = mx; _originY = my; _button = b;
@@ -223,10 +221,11 @@ public sealed unsafe class MouseLookService : IExtenderService
     /// just an Alt.</summary>
     private static bool ActionGateOpen()
         => MouseLook.ActionEnabled && GameGate.InGame && CameraService.Mode >= 0 && !CameraService.GateUp && !FreeCameraService.Active
+           && (CameraService.Mode != 2 || CameraModes.Driving.Enabled.V)
            && !UiHost.AnyKeyboardOwner && !UiHost.AnySuppressChords;
 
     // v0.4: Alt no longer releases the mouse; the Z toggle above owns this latch.
-    private static bool AltFreed() => MouseLook.AltToggle.V && _altFree;
+    private static bool AltFreed() => (CameraService.Mode == 2 || MouseLook.AltToggle.V) && _altFree;
 
     private static void SetAction(bool on)
     {
@@ -315,7 +314,7 @@ public sealed unsafe class MouseLookService : IExtenderService
     /// key-name table (cold: a chord edit, not a hot hook).</summary>
     internal static void ActionKeyChanged()
     {
-        for (int i = 0; i < _toggleCodes.Length; i++) _toggleCodes[i] = ParseKey(CameraModes.ByMode[i].ActionKey.V);
+        for (int i = 0; i < _toggleCodes.Length; i++) _toggleCodes[i] = i == 2 ? 0 : ParseKey(CameraModes.ByMode[i].ActionKey.V);
     }
 
     private static int ParseKey(string? name)
@@ -344,12 +343,8 @@ public sealed unsafe class MouseLookService : IExtenderService
         public void FireMouse(int button, int sdlMods) { if (ToggleCode < 0 && button == -ToggleCode) Flip(); }
         private static void Flip()
         {
-            if (CameraService.Mode == 2)
-            {
-                DrivingActionEnabled = !DrivingActionEnabled;
-                ActionChanged();
-            }
-            else MouseLook.Action.Set(!MouseLook.Action.V);
+            // No Driving action toggle: Z only pauses mouse capture.
+            if (CameraService.Mode != 2) MouseLook.Action.Set(!MouseLook.Action.V);
         }
     }
 
@@ -357,6 +352,7 @@ public sealed unsafe class MouseLookService : IExtenderService
     /// the next event, which reads the knob).</summary>
     internal static void ActionChanged()
     {
+        if (CameraService.Mode == 2) return; // Legacy driving.action writes cannot disable the mandatory camera.
         _altFree = false;
         if (MouseLook.ActionEnabled) EntryPitchState.Armed = true;
         else
@@ -368,8 +364,8 @@ public sealed unsafe class MouseLookService : IExtenderService
 
     /// <summary>The master's <c>changed:</c>: the off edge releases a look or a held press at once, so the
     /// cursor is never left captured waiting for the next mouse event. Nothing on the on edge -- the next press
-    /// reads <c>MouseLook.Enabled.V</c>.</summary>
-    internal static void MasterChanged() { if (!MouseLook.Enabled.V) { Release(); if (_action) SetAction(false); } }
+    /// reads <c>MouseLook.LookEnabled</c>.</summary>
+    internal static void MasterChanged() { if (!MouseLook.LookEnabled) { Release(); if (_action) SetAction(false); } }
 
     /// <summary>End a look or a held press: cursor back where the drag began, relative mode off, state idle.</summary>
     private static void Release()
@@ -406,7 +402,7 @@ public sealed unsafe class MouseLookService : IExtenderService
 
     /// <summary>The mouse-look line of the live mode's status.</summary>
     internal static string Report() =>
-        FormattableString.Invariant($"{(MouseLook.Enabled.V ? "on" : "OFF (the stock middle-drag)")}; right-drag {(MouseLook.Right.V ? "on" : "off")}, middle-drag {(MouseLook.Enabled.V ? "captured" : "stock")}; sensitivity {MouseLook.Sens.V:0.##} invert {(MouseLook.Invert.V ? 1 : 0)} threshold {MouseLook.Threshold.V}px | {_looks} look(s), {_clicks} replayed click(s), state {_state}; action camera {(MouseLook.ActionEnabled ? (_action ? "on" : "paused") : "off")}, {_actions} capture(s), {_walksRefused} walk(s) refused, {_selfHidden} self-pick(s) hidden | {AimAssist.Report()} | {ActionFeedback.Report()} | {HeadTrackService.Fragment}");
+        FormattableString.Invariant($"{(MouseLook.LookEnabled ? "on" : "OFF (the stock middle-drag)")}; right-drag {(MouseLook.RightEnabled ? "on" : "off")}, middle-drag {(MouseLook.LookEnabled ? "captured" : "stock")}; sensitivity {MouseLook.Sens.V:0.##} invert {(MouseLook.Invert.V ? 1 : 0)} threshold {MouseLook.Threshold.V}px | {_looks} look(s), {_clicks} replayed click(s), state {_state}; action camera {(MouseLook.ActionEnabled ? (_action ? "aiming" : "cursor released / UI paused") : "off")}, {_actions} capture(s), {_walksRefused} walk(s) refused, {_selfHidden} self-pick(s) hidden | {AimAssist.Report()} | {ActionFeedback.Report()} | {HeadTrackService.Fragment}");
 }
 
 /// <summary>The action camera's crosshair: a small four-arm reticle at the viewport centre, drawn as a registered

@@ -273,7 +273,7 @@ public sealed unsafe class CameraService : IExtenderService
         JumpPositionService.Tick(dt, true);
         // Prevent first-person native pull-in from colliding with the body.
         if (CameraService.Mode == 2 && CameraModes.Driving.Enabled.V
-            && CameraModes.Driving.FirstPersonActive && MouseLookService.ActionHeld
+            && CameraModes.Driving.FirstPersonActive && MouseLook.ActionEnabled
             && !FreeCameraService.Active)
         {
             _wantNoCollision = true;
@@ -454,7 +454,7 @@ public sealed unsafe class CameraService : IExtenderService
         bool aim = TabTargetService.AimPoint(out float ax, out float ay, out float az);
         if (!aim) _aimBase = float.NaN;
         // Keep the first-person view controlled by mouse, never by motion or turn keys.
-        if (!aim && mode == 2 && m.FirstPersonActive && MouseLookService.ActionHeld)
+        if (!aim && mode == 2 && m.FirstPersonActive && MouseLook.ActionEnabled)
         {
             var chase = new CNWCModule(Module());
             chase.ChaseSuppressed = 1;

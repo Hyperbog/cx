@@ -84,6 +84,10 @@ internal static class CameraKnobs
           CameraModes.Driving.FacingActive && CameraModes.Driving.CleanAimActive && CameraModes.Driving.HeadAimActive &&
           CameraModes.Driving.PositionLag == 0f && CameraModes.Driving.RotationLag == 0f && CameraModes.Driving.ZoomLag == 0f,
           "Driving preset ignores legacy switches and all camera lag");
+        check.Expect(CameraModes.Driving.Action.Default && CameraModes.Driving.Look.Tier == Tier.ChatOnly &&
+          CameraModes.Driving.Right.Tier == Tier.ChatOnly && CameraModes.Driving.ActionKey.Tier == Tier.ChatOnly &&
+          CameraModes.Driving.SideRun.Tier == Tier.ChatOnly && CameraModes.Driving.Recenter.Tier == Tier.ChatOnly,
+          "Driving permanently uses Action Camera and hides obsolete drag/recenter controls");
         check.Expect(CameraModes.Driving.FirstPerson.Tier == Tier.ChatOnly && CameraModes.Driving.Drive.Tier == Tier.ChatOnly &&
           CameraModes.Driving.Face.Tier == Tier.ChatOnly && CameraModes.Driving.Action.Tier == Tier.ChatOnly &&
           CameraModes.Driving.HeadTrack.Tier == Tier.ChatOnly && CameraModes.Driving.CleanReticle.Tier == Tier.ChatOnly &&
@@ -139,7 +143,7 @@ public sealed class CameraModeKnobs
         _mode = mode;
         G = KnobGroup.Declare(name, "Controls", mode == 2 ? "Enhanced First Person" : submenu, master: mode == 2 ? "Enable the CX Driving camera" : "Enable the CX camera for this mode",
             masterHelp: mode == 2 ? "Enables the CX Driving camera and built-in first-person movement. Turn it off to restore the game's standard Driving camera." : "CX shapes this camera mode: smoothing, field of view, offset, camera-relative movement, auto-recenter. Off, the stock camera runs untouched in this mode.",
-            header: mode == 2 ? "Eye-level view, camera-relative movement, and aiming are built in. Close Settings to aim with the mouse. Use the Action Camera shortcut to release or recapture the cursor." : "The game has three camera modes, picked under its own Options » Controls » Camera Mode (Chase Cam, Driving, Top Down; Top Down is the game default). The camera-mode key (* by default) flips between Driving and the other one you picked. Each mode keeps its own settings here.",
+            header: mode == 2 ? "Action Camera and eye-level aiming are always enabled in Driving mode. Press Z to release or recapture the cursor; menus and text entry automatically release it." : "The game has three camera modes, picked under its own Options » Controls » Camera Mode (Chase Cam, Driving, Top Down; Top Down is the game default). The camera-mode key (* by default) flips between Driving and the other one you picked. Each mode keeps its own settings here.",
             order: order);
         G.PanelStatus = () => mode == 2 && CameraService.Mode == 2 ? ModeLine(mode, submenu) + "\n" + HeadTrackService.Fragment : ModeLine(mode, submenu);
         G.Status = () => CameraService.Mode == mode ? ModeLine(mode, submenu) + "\n" + MouseLookService.Report()
@@ -183,9 +187,9 @@ public sealed class CameraModeKnobs
                          help: mode == 2 ? "Movement keys follow the direction of the camera rather than your character's current facing. Requires the CX camera." : "Forward is where the camera looks, not where your character faces.");
         Face = G.Toggle("face", mode == 2 ? "Face camera direction while moving" : "Face where the camera looks", faceDefault, mode == 2 ? Tier.ChatOnly : Tier.User,
                         help: mode == 2 ? "Outside first-person aiming, your character faces the camera direction while you move. First-person Action Camera already enforces this, so this option has no extra effect there." : "Your character always faces the camera's direction. Forward runs that way, back walks backwards, the strafe keys sidestep, and the turn keys turn you and the camera together. After you look around with the mouse, your character turns to the new direction on the next step. Off: your character turns to face whichever way it moves, and the camera swings behind it.");
-        SideRun = G.Toggle("siderun", mode == 2 ? "Use turn keys to move sideways" : "Turn keys run sideways", false, Tier.Advanced,
+        SideRun = G.Toggle("siderun", mode == 2 ? "Use turn keys to move sideways" : "Turn keys run sideways", false, mode == 2 ? Tier.ChatOnly : Tier.Advanced,
                            help: mode == 2 ? "With camera-facing movement enabled outside first-person aiming, turn keys can move you sideways. In first-person Action Camera, they already move sideways." : "With Face where the camera looks on: the turn keys run you sideways instead of turning you and the camera (your character faces where it runs, the camera stays). The mouse is the way to look around; back turns you to the camera at once. Locked on a target this is always so, for the strafe keys too.");
-        Recenter = G.Toggle("recenter", mode == 2 ? "Turn camera toward movement" : "Swing behind you as you move", moveDefault, mode == 2 ? Tier.Advanced : Tier.User,
+        Recenter = G.Toggle("recenter", mode == 2 ? "Turn camera toward movement" : "Swing behind you as you move", moveDefault, mode == 2 ? Tier.ChatOnly : Tier.User,
                             help: mode == 2 ? "Outside first-person aiming, turns the camera behind your movement direction. First-person Action Camera prevents automatic recentering." : "The camera turns to follow your movement direction instead of the stock chase.");
         Rate = G.Slider("rate", "Recenter speed", 1f, 720f, 5f, 360f, "deg/s", Tier.Advanced,
                         help: "Fastest swing behind your movement; it eases in near the target.");
@@ -203,16 +207,16 @@ public sealed class CameraModeKnobs
         Turn = G.Slider("turn", "Heading turn rate", 0f, 3600f, 30f, 540f, "deg/s", Tier.ChatOnly, help: "0 = snap.");
         ShiftRun = G.Toggle("shiftrun", "Hold Shift to run", false, Tier.ChatOnly,
             help: "When Action Camera is enabled: walk on forward and sideways movement, hold either Shift for native run. Backpedal stays native.");
-        G.Section("Mouse-look");
-        Look = G.Toggle("mouselook", mode == 2 ? "Enable mouse-look" : "Enable CX mouse-look", true, changed: MouseLookService.MasterChanged,
+        G.Section(mode == 2 ? "Aiming" : "Mouse-look");
+        Look = G.Toggle("mouselook", mode == 2 ? "Enable mouse-look" : "Enable CX mouse-look", true, mode == 2 ? Tier.ChatOnly : Tier.User, changed: MouseLookService.MasterChanged,
                         help: mode == 2 ? "Allows mouse-drag camera movement and is required for Action Camera input. When disabled, the game's standard middle-button camera controls are used." : "CX handles the mouse-drag camera: the cursor stays put and the view never stalls at the screen edge. Off, the stock middle-drag orbit runs.");
-        Right = G.Toggle("right", mode == 2 ? "Look around with right-drag" : "Right-drag looks around", false, mode == 2 ? Tier.Advanced : Tier.User,
+        Right = G.Toggle("right", mode == 2 ? "Look around with right-drag" : "Right-drag looks around", false, mode == 2 ? Tier.ChatOnly : Tier.User,
                          help: mode == 2 ? "When Action Camera is not capturing the mouse, hold the right button and drag to rotate the view. A click still opens the radial menu." : "Hold the right button and drag to orbit; a still right-click still opens the radial menu.");
         Sens = G.Slider("sens", mode == 2 ? "Mouse sensitivity" : "Sensitivity", 0.05f, 20f, 0.05f, 1f, "x", help: mode == 2 ? "Changes how far the camera turns when you move the mouse. A value of 1 matches normal mouse-drag sensitivity." : "1 matches the stock middle-drag.");
         Invert = G.Toggle("invert", mode == 2 ? "Invert vertical mouse movement" : "Invert vertical", false, help: mode == 2 ? "When enabled, moving the mouse up tilts the camera down. Applies to mouse-look and Action Camera." : "Dragging up tilts the view down.");
         Threshold = G.Slider("threshold", "Click-to-drag threshold", 0, 100, 1, 4, "px", Tier.ChatOnly,
                              help: "Pixels of movement before a right press becomes a look instead of a click.");
-        G.Section("Action camera");
+        G.Section(mode == 2 ? "Aim indicators" : "Action camera");
         HideHead = G.Toggle("hidehead", "Hide local head only", false, Tier.ChatOnly,
             help: "Only hide your own head in first-person Driving mode. Body and equipment remain visible; other camera modes restore the head.");
         CleanReticle = G.Toggle("cleanreticle", mode == 2 ? "Hide aim brackets and attack square" : "No target or attack squares", false, Tier.ChatOnly,
@@ -222,9 +226,9 @@ public sealed class CameraModeKnobs
         // OPTIONAL TEST ADD-ON: the Vulkan world colour pass omits this player's model.
         HideBody = G.Toggle("hidebody", "Hide local player model in first person", false, Tier.ChatOnly,
                             help: "Test option: hide your character's visible model and attachments only in the first-person Vulkan world view. Does not change movement or combat.");
-        Action = G.Toggle("action", mode == 2 ? "Enable Action Camera" : "Action camera", false, mode == 2 ? Tier.ChatOnly : Tier.User, changed: MouseLookService.ActionChanged,
+        Action = G.Toggle("action", mode == 2 ? "Enable Action Camera" : "Action camera", mode == 2, mode == 2 ? Tier.ChatOnly : Tier.User, changed: MouseLookService.ActionChanged,
                           help: mode == 2 ? "Uses the screen center for aiming and mouse movement for looking around. Left-click interacts; right-click opens the radial menu. Walk with movement keys. Close this panel to capture the mouse; use the Action Camera key to switch modes." : "Hides the cursor and pins it to a crosshair in the centre of the screen. Moving the mouse turns the camera; whatever the crosshair points at is what you hover, tooltip and click, so aiming replaces pointing. Left-click acts on it, a right-click opens its menu. Clicking the ground does not walk you there (use the movement keys) and the crosshair never picks your own character. Alt frees the cursor for the game's panels (held, or a tap with the toggle option below); the toggle key switches the camera on and off.");
-        ActionKey = G.Text("actionkey", "Action camera toggle key", "]", changed: MouseLookService.ActionKeyChanged,
+        ActionKey = G.Text("actionkey", "Action camera toggle key", "]", mode == 2 ? Tier.ChatOnly : Tier.User, changed: MouseLookService.ActionKeyChanged,
                            help: mode == 2 ? "Key that turns Action Camera on or off, such as F8 or Mouse4. Leave blank to disable the shortcut." : "An SDL key name (F8, Tab, Backspace, Z...) or Mouse4 / Mouse5 for the thumb buttons. Blank binds nothing.");
         AltToggle = G.Toggle("alttoggle", mode == 2 ? "Press Z to release or capture the mouse" : "Alt toggles the cursor", false, Tier.ChatOnly,
                              help: mode == 2 ? "When Action Camera is enabled, press Z to free the cursor for menus; press Z again to resume aiming. This option does not use the Alt key." : "Under the action camera, tapping Alt frees the cursor until you tap it again, instead of holding it.");
@@ -358,7 +362,9 @@ internal static class MouseLook
     internal static Knob<bool> Right => M.Right;
     internal static Knob<bool> Invert => M.Invert;
     internal static Knob<bool> Action => M.Action;
-    internal static bool ActionEnabled => CameraService.Mode == 2 ? MouseLookService.DrivingActionEnabled : M.Action.V;
+    internal static bool ActionEnabled => CameraService.Mode == 2 || M.Action.V;
+    internal static bool LookEnabled => CameraService.Mode == 2 || M.Look.V;
+    internal static bool RightEnabled => CameraService.Mode != 2 && M.Right.V;
     internal static Knob<bool> AltToggle => M.AltToggle;
     internal static Knob<bool> HeadTrack => M.HeadTrack;
     internal static bool HeadAimEnabled => M.HeadAimActive;
