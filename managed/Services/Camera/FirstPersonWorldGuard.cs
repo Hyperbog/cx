@@ -127,7 +127,7 @@ internal static class FirstPersonWorldGuard
     // Same first-person predicate as Fix10's scoped color-only visibility mode.
     internal static bool FirstPersonActive =>
         CameraService.Mode == 2 && !CameraService.GateUp && !FreeCameraService.Active
-        && CameraModes.Driving.FirstPerson.V;
+        && CameraModes.Driving.FirstPersonActive;
 
     internal static bool SuppressKeyhole => KeyholeOff.V && FirstPersonActive;
 

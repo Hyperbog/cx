@@ -189,7 +189,7 @@ internal static unsafe class ActionFeedback
             b.Rect(cx - d - t, cy - half, cx - d + t, cy + half, 1f, 1f, 1f, al);
             b.Rect(cx + d - t, cy - half, cx + d + t, cy + half, 1f, 1f, 1f, al);
         }
-        if (MouseLook.Feedback.V && attacking && !CameraModes.Driving.CleanReticle.V)
+        if (MouseLook.Feedback.V && attacking && !CameraModes.Driving.CleanAimActive)
             Ring(b, cx, cy, AttackRing * s, t, AttackR, AttackG, AttackB, 0.55f);
         if (CameraModes.Driving.HitMarker.V)
         {

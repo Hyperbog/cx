@@ -131,9 +131,9 @@ public sealed unsafe class CameraDriveService : IExtenderService
         float f = 0f, s = 0f;
         int liveMode = CameraService.Mode;
         // In first-person, turn-key slots are strafes; mouse-look alone owns yaw.
-        bool firstPersonStrafe = liveMode == 2 && CameraModes.Driving.FirstPerson.V
+        bool firstPersonStrafe = liveMode == 2 && CameraModes.Driving.FirstPersonActive
             && MouseLookService.ActionHeld;
-        bool face = firstPersonStrafe || (liveMode >= 0 && CameraModes.ByMode[liveMode].Face.V);
+        bool face = firstPersonStrafe || (liveMode >= 0 && CameraModes.ByMode[liveMode].FacingActive);
         // Side run: a turn key under <mode>.siderun, or any side key while locked on a target, runs the
         // creature sideways facing where it runs -- no orbit for the turn keys, no held facing to strafe under.
         bool sideRun = false;
@@ -204,7 +204,9 @@ public sealed unsafe class CameraDriveService : IExtenderService
         _lastTick = now;
         CameraModeKnobs mk = CameraModes.ByMode[liveMode];
         // Side run's back-pedal snaps to the camera: a slew from the sideways facing it just ran on would walk an arc.
-        _heading = sideRun && f < 0f ? want : Slew(_heading, want, mk.Turn.V, dt);
+        // Mouse yaw drives first-person facing immediately, without the packet-heading slew.
+        _heading = firstPersonStrafe ? FirstPersonHeading(_heading, want, mk.Turn.V, dt)
+            : sideRun && f < 0f ? want : Slew(_heading, want, mk.Turn.V, dt);
         bool keysChanged = f != _lastF || s != _lastS;
         _lastF = f; _lastS = s;
         int tenths = Tenths(_heading);
@@ -268,7 +270,7 @@ public sealed unsafe class CameraDriveService : IExtenderService
     private static void D2ObserveInput(CClientExoAppInternal app)
     {
         if (_log == null || !_probeOk || CameraService.Mode != 2 ||
-            !CameraModes.Driving.FirstPerson.V)
+            !CameraModes.Driving.FirstPersonActive)
         {
             _d2Ready = false;
             Interlocked.Exchange(ref _d2WindowEnd, 0);
@@ -334,7 +336,7 @@ public sealed unsafe class CameraDriveService : IExtenderService
         long until = Interlocked.Read(ref _d2WindowEnd);
         return _log != null && _probeOk && _d2Ready && releaseAt > 0 &&
             at >= releaseAt && at <= until && CameraService.Mode == 2 &&
-            CameraModes.Driving.FirstPerson.V;
+            CameraModes.Driving.FirstPersonActive;
     }
 
     private const int D4InboundLimit = 1800;
@@ -379,7 +381,7 @@ public sealed unsafe class CameraDriveService : IExtenderService
     {
         D3StepSample sample = default;
         if (_log == null || !_probeOk || CameraService.Mode != 2 ||
-            !CameraModes.Driving.FirstPerson.V)
+            !CameraModes.Driving.FirstPersonActive)
         {
             _d3PreviousValid = false;
             return sample;
@@ -507,7 +509,7 @@ public sealed unsafe class CameraDriveService : IExtenderService
     {
         DriveReleaseTraceSample sample = default;
         if (_log == null || !_probeOk || CameraService.Mode != 2 ||
-            !CameraModes.Driving.FirstPerson.V || _driveTraceLines >= DriveTraceMaxLines)
+            !CameraModes.Driving.FirstPersonActive || _driveTraceLines >= DriveTraceMaxLines)
         {
             _driveTraceMask = 0;
             _driveTraceUntil = 0;
@@ -596,6 +598,8 @@ public sealed unsafe class CameraDriveService : IExtenderService
     private static int Tenths(float deg) => ((int)MathF.Round(deg * 10f) % WireTenths + WireTenths) % WireTenths;
 
     /// <summary>Turn <paramref name="from"/> toward <paramref name="to"/> the short way, at most rate*dt degrees (rate 0 = snap).</summary>
+    private static float FirstPersonHeading(float from, float to, float rate, float dt) => to;
+
     private static float Slew(float from, float to, float rate, float dt)
     {
         float d = to - from;
@@ -612,7 +616,7 @@ public sealed unsafe class CameraDriveService : IExtenderService
         if (mode < 0) return Why.NoMode;
         CameraModeKnobs m = CameraModes.ByMode[mode];
         if (!m.Enabled.V) return Why.Master;
-        if (!m.Drive.V) return Why.Off;
+        if (!m.MovementActive) return Why.Off;
         if (CameraService.GateUp) return Why.Gate;
         IntPtr module = CameraService.Module();
         cam = module == IntPtr.Zero ? IntPtr.Zero : new CNWCModule(module).Camera.Ptr;
@@ -630,7 +634,7 @@ public sealed unsafe class CameraDriveService : IExtenderService
     private static string Report()
     {
         int mode = CameraService.Mode;
-        string on = mode < 0 ? "?" : !CameraModes.ByMode[mode].Enabled.V ? "off (master)" : CameraModes.ByMode[mode].Drive.V ? "on" : "off";
+        string on = mode < 0 ? "?" : !CameraModes.ByMode[mode].Enabled.V ? "off (master)" : CameraModes.ByMode[mode].MovementActive ? "on" : "off";
         return FormattableString.Invariant(
             $"camera drive: {on} ({(mode < 0 ? "no mode" : CameraModes.ByMode[mode].G.Name)}) heading {_tenths / 10f:0.0} | {(_why == Why.Active ? "active" : "held down: " + WhyNames[(int)_why])} | {_sends} send(s), {_latches} latch(es), {_aborts} abort(s){(mode < 0 ? "" : $", hz {CameraModes.ByMode[mode].Hz.V:0.#} turn {CameraModes.ByMode[mode].Turn.V:0}")}");
     }
@@ -647,6 +651,7 @@ public sealed unsafe class CameraDriveService : IExtenderService
         check.Expect(T(1, 0, 0, -1) == 1800, "A walks west (180°)");
         check.Expect(T(1, 0, 1, 1) == 450, "W+D is the 45° diagonal");
         check.Expect(T(0, 1, 1, 0) == 1800, "camera turned to look west: W walks west");
+        check.Expect(Tenths(FirstPersonHeading(350f, 10f, 540f, 0f)) == 100, "first-person mouse heading never slews");
         check.Expect(Tenths(Slew(350f, 10f, 540f, 0.01f)) == 3554, "the slew takes the short way across 0 and wraps");
         check.Expect(Tenths(Slew(10f, 350f, 540f, 0.01f)) == 46 && Slew(10f, 350f, 0f, 0.01f) == 350f, "and back; rate 0 snaps");
         check.Expect(Slew(90f, 270f, 540f, 1f) == 270f, "a reach within the budget lands exactly");

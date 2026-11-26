@@ -196,7 +196,10 @@ internal static class HeadBoneCamera
     /// </summary>
     private static void TurnCharacter(IntPtr player, Quaternion rotation)
     {
-        if (!Face.V) return;
+        if (!CameraModes.Driving.FacingActive) return;
+        // The native drive step owns facing during movement; avoid a later
+        // second write with a different camera timestamp.
+        if (CameraDriveService.Held) return;
         Vector3 forward = Vector3.Transform(-Vector3.UnitZ, rotation);
         forward.Z = 0f;
         if (!Finite(forward) || forward.LengthSquared() < 0.001f) return;

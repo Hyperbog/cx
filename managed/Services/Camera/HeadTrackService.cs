@@ -80,11 +80,11 @@ public sealed unsafe class HeadTrackService : IExtenderService
         if (_controlNext == null) { log.Info("HeadTrack: standing down (Control chain refused)"); return; }
         _armed = true;
         log.Info("HeadTrack: hooked CNWCCreature::UpdateLookAt + LookAtAnimation::Control "
-                 + $"(arcs {MouseLook.HeadYaw.V:0}/{MouseLook.HeadPitch.V:0} deg, {(MouseLook.HeadTrack.V ? "on" : "off")})");
+                 + $"(arcs {MouseLook.HeadYaw.V:0}/{MouseLook.HeadPitch.V:0} deg, {(MouseLook.HeadAimEnabled ? "on" : "off")})");
     }
 
     /// <summary>Driving this frame: the knob, the action camera actually held, and nothing rotten.</summary>
-    private static bool Wanted => _armed && !_rot && MouseLook.HeadTrack.V && MouseLookService.ActionHeld;
+    private static bool Wanted => _armed && !_rot && MouseLook.HeadAimEnabled && MouseLookService.ActionHeld;
 
     /// <summary>The engine's own target chooser. For the local player under the action camera it is replaced
     /// by one <c>BeginLookAtAnimate</c> aimed at ourselves, which <see cref="OnControl"/> then re-aims; every
@@ -220,7 +220,7 @@ public sealed unsafe class HeadTrackService : IExtenderService
     internal static string Fragment =>
         !_armed ? "head tracking unhooked"
         : _rot ? "head tracking stood down (layout probe)"
-        : FormattableString.Invariant($"head tracking {(MouseLook.HeadTrack.V ? "on" : "off")}, {_drives} drive(s), {_writes} aim write(s)");
+        : FormattableString.Invariant($"head tracking {(MouseLook.HeadAimEnabled ? "on" : "off")}, {_drives} drive(s), {_writes} aim write(s)");
 
     /// <summary>The ported maths against the engine's conventions: a yaw of +Y is 0 and east is -90
     /// (<c>atan2(-x, y)</c>), and a pose written by <see cref="CameraService.Pose"/> reads back as the yaw it

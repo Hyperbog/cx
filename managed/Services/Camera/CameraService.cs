@@ -273,7 +273,7 @@ public sealed unsafe class CameraService : IExtenderService
         JumpPositionService.Tick(dt, true);
         // Prevent first-person native pull-in from colliding with the body.
         if (CameraService.Mode == 2 && CameraModes.Driving.Enabled.V
-            && CameraModes.Driving.FirstPerson.V && MouseLookService.ActionHeld
+            && CameraModes.Driving.FirstPersonActive && MouseLookService.ActionHeld
             && !FreeCameraService.Active)
         {
             _wantNoCollision = true;
@@ -344,7 +344,7 @@ public sealed unsafe class CameraService : IExtenderService
             _sYaw = _yaw; _sPitch = _pitch; _sDist = _dist; _sFocus = focus; _vYaw = _vPitch = _vDist = 0; _vFocus = default;
             AlloyRenderer.CameraCut();
         }
-        float lagPos = m.LagPos.V, lagRot = m.LagRot.V, lagZoom = m.LagZoom.V;
+        float lagPos = m.PositionLag, lagRot = m.RotationLag, lagZoom = m.ZoomLag;
         _sFocus = lagPos > 0 ? SmoothDamp(_sFocus, focus, ref _vFocus, lagPos, dt) : focus;
         if (lagRot > 0)
         {
@@ -361,11 +361,11 @@ public sealed unsafe class CameraService : IExtenderService
         float pitch = Math.Clamp(_sPitch + m.PitchCurve.V * (_sDist - m.PitchRef.V), lo, hi);
         _outPitch = pitch;
         Quaternion q = Pose(_sYaw, pitch);
-        if (mode != 2 || !m.FirstPerson.V) JumpPreview.Reset();
+        if (mode != 2 || !m.FirstPersonActive) JumpPreview.Reset();
         // Use the player actor's *world position*, not the orbit's follow focus:
         // turning or pitching cannot move the camera in a circle around the feet.
         // This is a calibrated eye height, NOT a head-bone attachment.
-        if (m.FirstPerson.V && MouseLook.Action.V)
+        if (m.FirstPersonActive && MouseLook.ActionEnabled)
         {
             IntPtr player = PlayerCreature();
             if (player != IntPtr.Zero)
@@ -454,7 +454,7 @@ public sealed unsafe class CameraService : IExtenderService
         bool aim = TabTargetService.AimPoint(out float ax, out float ay, out float az);
         if (!aim) _aimBase = float.NaN;
         // Keep the first-person view controlled by mouse, never by motion or turn keys.
-        if (!aim && mode == 2 && m.FirstPerson.V && MouseLookService.ActionHeld)
+        if (!aim && mode == 2 && m.FirstPersonActive && MouseLookService.ActionHeld)
         {
             var chase = new CNWCModule(Module());
             chase.ChaseSuppressed = 1;
@@ -789,7 +789,7 @@ public sealed unsafe class CameraService : IExtenderService
     {
         CameraModeKnobs? m = _mode is >= 0 and < 3 ? CameraModes.ByMode[_mode] : null;
         string knobs = m == null ? "" :
-            Inv($"; {m.G.Name}: fov {m.Fov.V:0.#} lag {m.LagPos.V:0.##}/{m.LagRot.V:0.##}/{m.LagZoom.V:0.##} pitchcurve {m.PitchCurve.V:0.##}@{m.PitchRef.V:0.#}")
+            Inv($"; {m.G.Name}: fov {m.Fov.V:0.#} lag {m.PositionLag:0.##}/{m.RotationLag:0.##}/{m.ZoomLag:0.##} pitchcurve {m.PitchCurve.V:0.##}@{m.PitchRef.V:0.#}")
           + Inv($" offset {m.OffsetX.V:0.##} {m.OffsetY.V:0.##}")
           + (_offsetOn ? Inv($" arm {_arm:0.00} (margin {Walls.Margin.V:0.##} in {Walls.ArmIn.V:0.#} out {Walls.ArmOut.V:0.#} radius {Walls.ArmRadius.V:0.##})") : "");
         string recenter = m == null ? "" : !m.Recenter.V ? "; recenter off" :

@@ -171,12 +171,12 @@ internal static class FirstPersonVisibility
         FirstPersonModelProbe.Begin(cameraFollow, Probe.V, Volatile.Read(ref _body),
             Volatile.Read(ref _published), Volatile.Read(ref _head),
             CameraService.Mode == 2 && !CameraService.GateUp && !FreeCameraService.Active &&
-            CameraModes.Driving.FirstPerson.V);
+            CameraModes.Driving.FirstPersonActive);
         int requested = Mode.V;
         if (requested is < 1 or > 2) { _status = "normal mode"; return; }
         if (cameraFollow == 0) { _status = "no camera target"; return; }
         if (CameraService.Mode != 2 || CameraService.GateUp || FreeCameraService.Active
-            || !CameraModes.Driving.FirstPerson.V) { _status = "non-first-person gate"; return; }
+            || !CameraModes.Driving.FirstPersonActive) { _status = "non-first-person gate"; return; }
         long tick = Volatile.Read(ref _published);
         if (tick == 0 || Stopwatch.GetTimestamp() - tick > Stopwatch.Frequency / 5)
         { _status = "no recent first-person pose"; return; }

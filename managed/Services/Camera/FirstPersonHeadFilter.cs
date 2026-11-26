@@ -42,8 +42,8 @@ internal static class FirstPersonHeadFilter
     private static void Tick()
     {
         DbId id = default;
-        if (CameraModes.Driving.HideHead.V && CameraModes.Driving.FirstPerson.V &&
-            CameraModes.Driving.Action.V && CameraService.Mode == 2 && !CameraService.GateUp)
+        if (CameraModes.Driving.HideHead.V && CameraModes.Driving.FirstPersonActive &&
+            MouseLook.ActionEnabled && CameraService.Mode == 2 && !CameraService.GateUp)
         {
             IntPtr cre = CameraService.PlayerCreature();
             if (cre != IntPtr.Zero)

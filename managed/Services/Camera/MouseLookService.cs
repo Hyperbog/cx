@@ -58,6 +58,8 @@ public sealed unsafe class MouseLookService : IExtenderService
     private static int _looks, _clicks, _actions;
     /// <summary>Action camera held (relative mode ours) and the centre the events are pinned to.</summary>
     private static bool _action;
+    // Driving begins in aiming mode; shortcut temporarily releases cursor without cfg writes.
+    internal static bool DrivingActionEnabled { get; private set; } = true;
     // One toggle lifecycle, no re-level on Alt releases or UI focus changes.
     private static class EntryPitchState
     {
@@ -135,7 +137,7 @@ public sealed unsafe class MouseLookService : IExtenderService
             if (capture != _action) SetAction(capture);
             return 0;
         }
-        if (MouseLook.AltToggle.V && MouseLook.Action.V && GameGate.InGame &&
+        if (MouseLook.AltToggle.V && MouseLook.ActionEnabled && GameGate.InGame &&
             !UiHost.AnyKeyboardOwner && *(uint*)ev == 0x301 &&
             ((SdlEvent*)ev)->SymU == (uint)'z') return 0; // SDL_KEYUP
         bool want = ActionWanted();
@@ -220,7 +222,7 @@ public sealed unsafe class MouseLookService : IExtenderService
     /// allowed to flip in, so an Alt pressed out of game, in a dialog or while anything owns the keyboard is
     /// just an Alt.</summary>
     private static bool ActionGateOpen()
-        => MouseLook.Action.V && GameGate.InGame && CameraService.Mode >= 0 && !CameraService.GateUp && !FreeCameraService.Active
+        => MouseLook.ActionEnabled && GameGate.InGame && CameraService.Mode >= 0 && !CameraService.GateUp && !FreeCameraService.Active
            && !UiHost.AnyKeyboardOwner && !UiHost.AnySuppressChords;
 
     // v0.4: Alt no longer releases the mouse; the Z toggle above owns this latch.
@@ -340,7 +342,15 @@ public sealed unsafe class MouseLookService : IExtenderService
         public bool WantsKey(int key) => ToggleCode > 0 && key == ToggleCode;
         public void Fire(uint key, int sdlMods) { if (ToggleCode > 0 && key == ToggleCode) Flip(); }
         public void FireMouse(int button, int sdlMods) { if (ToggleCode < 0 && button == -ToggleCode) Flip(); }
-        private static void Flip() => MouseLook.Action.Set(!MouseLook.Action.V);
+        private static void Flip()
+        {
+            if (CameraService.Mode == 2)
+            {
+                DrivingActionEnabled = !DrivingActionEnabled;
+                ActionChanged();
+            }
+            else MouseLook.Action.Set(!MouseLook.Action.V);
+        }
     }
 
     /// <summary>The action toggle's <c>changed:</c>: the off edge frees the cursor at once (the on edge waits for
@@ -348,7 +358,7 @@ public sealed unsafe class MouseLookService : IExtenderService
     internal static void ActionChanged()
     {
         _altFree = false;
-        if (MouseLook.Action.V) EntryPitchState.Armed = true;
+        if (MouseLook.ActionEnabled) EntryPitchState.Armed = true;
         else
         {
             System.Threading.Interlocked.Exchange(ref EntryPitchState.Pending, 0);
@@ -396,7 +406,7 @@ public sealed unsafe class MouseLookService : IExtenderService
 
     /// <summary>The mouse-look line of the live mode's status.</summary>
     internal static string Report() =>
-        FormattableString.Invariant($"{(MouseLook.Enabled.V ? "on" : "OFF (the stock middle-drag)")}; right-drag {(MouseLook.Right.V ? "on" : "off")}, middle-drag {(MouseLook.Enabled.V ? "captured" : "stock")}; sensitivity {MouseLook.Sens.V:0.##} invert {(MouseLook.Invert.V ? 1 : 0)} threshold {MouseLook.Threshold.V}px | {_looks} look(s), {_clicks} replayed click(s), state {_state}; action camera {(MouseLook.Action.V ? (_action ? "on" : "paused") : "off")}, {_actions} capture(s), {_walksRefused} walk(s) refused, {_selfHidden} self-pick(s) hidden | {AimAssist.Report()} | {ActionFeedback.Report()} | {HeadTrackService.Fragment}");
+        FormattableString.Invariant($"{(MouseLook.Enabled.V ? "on" : "OFF (the stock middle-drag)")}; right-drag {(MouseLook.Right.V ? "on" : "off")}, middle-drag {(MouseLook.Enabled.V ? "captured" : "stock")}; sensitivity {MouseLook.Sens.V:0.##} invert {(MouseLook.Invert.V ? 1 : 0)} threshold {MouseLook.Threshold.V}px | {_looks} look(s), {_clicks} replayed click(s), state {_state}; action camera {(MouseLook.ActionEnabled ? (_action ? "on" : "paused") : "off")}, {_actions} capture(s), {_walksRefused} walk(s) refused, {_selfHidden} self-pick(s) hidden | {AimAssist.Report()} | {ActionFeedback.Report()} | {HeadTrackService.Fragment}");
 }
 
 /// <summary>The action camera's crosshair: a small four-arm reticle at the viewport centre, drawn as a registered
@@ -506,7 +516,7 @@ internal static class Crosshair
                 break;
         }
         if (fam == FamRefused) b.Rect(cx - t, cy - t, cx + t, cy + t, r, gr, bl, 0.9f);
-        if (!CameraModes.Driving.CleanReticle.V && AimAssist.AssistTarget != 0)
+        if (!CameraModes.Driving.CleanAimActive && AimAssist.AssistTarget != 0)
             Corners(b, cx, cy, Bracket * s, BracketTick * s, t, r, gr, bl, 0.75f);
         ActionFeedback.Draw(b, cx, cy, s, t);
         TextRig.DrawBatch(b.AsSpan(), b.VertexCount);
