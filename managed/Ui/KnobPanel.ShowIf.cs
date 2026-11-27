@@ -8,12 +8,11 @@ public sealed partial class KnobPanel
     /// <summary>The knob's <see cref="Knob.ShowIf"/> says no: the layout skips its row.</summary>
     private static bool Hides(Knob k) => k.ShowIf != null && !k.ShowIf();
 
-    /// <summary>Which of the group's conditional rows show, one character each: part of the status signature, so a
-    /// press that shows or hides a row lays the panel out again.</summary>
+    /// <summary>Which conditional User rows show, one character each. A change in this signature lays the rows out again.</summary>
     private static string ShowSig(KnobGroup g)
     {
         string sig = "";
-        foreach (Knob k in g.Knobs) if (k.ShowIf != null) sig += Hides(k) ? '0' : '1';
+        foreach (Knob k in g.Knobs) if (k.Tier == Tier.User && k.ShowIf != null) sig += Hides(k) ? '0' : '1';
         return sig;
     }
 }

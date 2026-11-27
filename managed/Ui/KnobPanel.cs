@@ -15,10 +15,8 @@ namespace CX.Ui;
 public sealed partial class KnobPanel
 {
     public static readonly string[] KnobCategories = { "General", "Interface", "Graphics", "Audio", "Controls" };
-    /// <summary>The row-column head's action: <see cref="KnobGroup.ResetRows"/> over every group of the submenu.</summary>
+    /// <summary>The row-column head's action resets the settings shown in the submenu.</summary>
     public const string ResetText = "Reset to defaults";
-    /// <summary>The disclosure row Advanced-tier rows sit behind, collapsed by default.</summary>
-    public const string AdvancedClosed = "▸ Advanced", AdvancedOpen = "▾ Advanced";
     /// <summary>Worn by a Restart-tier row, amber once its value has left the one it booted with.</summary>
     public const string BadgeText = "↻ restart";
     /// <summary>A confirming button's caption after its first press; it fires on a second press within
@@ -51,10 +49,10 @@ public sealed partial class KnobPanel
     internal Func<KnobGroup, Knob<bool>?> ResolveParent = g => g.Parent;
 
     // ---- rows ----
-    public enum RowKind { Note, Section, Knob, Status, Strip, Advanced, Channel, Item, Heading }
+    public enum RowKind { Note, Section, Knob, Status, Strip, Channel, Item, Heading }
 
     /// <summary>One laid-out line of the knob column: a section header, a note (the group's header text), the
-    /// status line, the parent-off strip, the Advanced disclosure, a control row (a knob's, or a consumer's with
+    /// status line, the parent-off strip, a control row (a knob's, or a consumer's with
     /// <see cref="K"/> null), one channel of an expanded swatch, or one entry of a list. Geometry is in
     /// list-content px -- the column's scroll offset and origin are added at draw and hit-test.</summary>
     public sealed class Row
@@ -88,11 +86,9 @@ public sealed partial class KnobPanel
         public bool Master;
         /// <summary>Which group of a shared submenu the row belongs to: its index into the panel's gates.</summary>
         public int Slot;
-        /// <summary>An Advanced-tier row: compact, its help behind the marker.</summary>
-        public bool Adv;
-        /// <summary>The <c>(?)</c> marker (an Advanced row with help) and the ↻ badge (a Restart row).</summary>
-        public bool HasMark, Restart;
-        /// <summary>Width reserved after the label's first line for the marker and the badge.</summary>
+        /// <summary>Whether the row shows a restart badge.</summary>
+        public bool Restart;
+        /// <summary>Width reserved after the label's first line for the badge.</summary>
         public float ExtraW;
         /// <summary>A swatch channel row: 0 R, 1 G, 2 B, 3 A; -1 otherwise.</summary>
         public int Channel = -1;
@@ -185,9 +181,6 @@ public sealed partial class KnobPanel
     public string[] Categories = KnobCategories;
     public int Category;
     public int Sub = -1;
-    /// <summary>The Advanced disclosure; closes when the submenu changes. Its rows draw compact, with the
-    /// <c>(?)</c> marker and a <see cref="Tooltip"/> where they have help.</summary>
-    public bool AdvOpen;
     /// <summary>One submenu: every group of the category that names it, in <see cref="KnobGroup.Order"/>.</summary>
     public sealed class SubMenu
     {
@@ -233,7 +226,6 @@ public sealed partial class KnobPanel
 
     public readonly ScrollColumn Cats = new(), SubCol = new(), List = new();
     public readonly Dropdown Drop = new();
-    public readonly Tooltip Tip = new();
 
     private bool _moving; private float _mgx, _mgy;
     private Row? _grab;
@@ -251,7 +243,7 @@ public sealed partial class KnobPanel
     /// <summary>The row column's head: the title line, plus the path line when there are submenus.</summary>
     private float KHeadH => BodyLh + (SubFrac > 0f ? SmallLh : 0f) + 1.2f * Em;
     private float RowMinH => 3.3f * Em;
-    /// <summary>A row without help lines (or an Advanced row) is compact.</summary>
+    /// <summary>A row without help lines is compact.</summary>
     private float RowPlainH => 2.4f * Em;
     private float ChanH => 2f * Em;
     private float ItemH => 2.2f * Em;
@@ -288,7 +280,7 @@ public sealed partial class KnobPanel
     {
         Open = true; _pressed = Modal; _grab = null; _moving = false; _editRow = null; _editText = ""; Collapsed = false;
         _confirm = null; _copied = null;
-        Drop.Close(); Tip.Cut();
+        Drop.Close();
         Measure(vpW, vpH, em, body, small);
         X = MathF.Round((vpW - W) / 2f); Y = MathF.Round((vpH - H) / 2f);
         Place();
@@ -314,7 +306,7 @@ public sealed partial class KnobPanel
     {
         Open = false; _pressed = false; _grab = null; _moving = false; _editRow = null; _editText = "";
         _confirm = null; _copied = null; _hoverRow = null;
-        Drop.Close(); Tip.Cut(); Cats.MouseUp(); SubCol.MouseUp(); List.MouseUp();
+        Drop.Close(); Cats.MouseUp(); SubCol.MouseUp(); List.MouseUp();
     }
 
     /// <summary>Seat the columns under the header for the current X/Y.</summary>
@@ -357,25 +349,25 @@ public sealed partial class KnobPanel
         LayoutRows();
     }
 
-    /// <summary>A group earns a place in the panel with a User or Advanced row or a player-facing status line;
+    /// <summary>A group earns a place in the panel with a User row or a player-facing status line;
     /// a diagnostics-only group lives in chat and <c>/knobs</c>.</summary>
     internal static bool Shown(KnobGroup g)
     {
         if (g.PanelStatus != null) return true;
-        foreach (Knob k in g.Knobs) if (k.Tier == Tier.User || k.Tier == Tier.Advanced) return true;
+        foreach (Knob k in g.Knobs) if (k.Tier == Tier.User) return true;
         return false;
     }
 
-    /// <summary>A submenu change: the disclosure closes and the expanded swatch folds.</summary>
+    /// <summary>A submenu change folds the expanded swatch.</summary>
     private void SelectSub(int s)
     {
-        Sub = s; AdvOpen = false; _expanded = null; List.Reset();
+        Sub = s; _expanded = null; List.Reset();
     }
 
     /// <summary>Lay out the chosen submenu's rows for the current geometry and faces, then publish the list. Per
-    /// group (a shared submenu heads each with its title): the strip when an ancestor or its own chat-only master
-    /// is off, the header note, the panel status line, the User rows (master boxed first) with their sections and
-    /// any expanded swatch's channels; then one Advanced disclosure and, open, every group's Advanced rows.</summary>
+    /// group (a shared submenu heads each with its title): the strip when an ancestor or a hidden master is off,
+    /// the header note, the panel status line, the User rows (master boxed first) with their sections and
+    /// any expanded swatch's channels.</summary>
     internal void LayoutRows()
     {
         SyncColumnLook();
@@ -400,7 +392,6 @@ public sealed partial class KnobPanel
         var stripOff = new List<bool>();
         if (gs.Length == 0)
             AddNote(rows, ref y, "Nothing here yet.", noteW);
-        int adv = 0;
         for (int slot = 0; slot < gs.Length; slot++)
         {
             KnobGroup g = gs[slot];
@@ -411,7 +402,7 @@ public sealed partial class KnobPanel
             gates[slot] = gate.ToArray();
             bool headed = !shared;
             void Head(ref float yy) { if (!headed) { AddHeading(rows, ref yy, g.Title); headed = true; } }
-            Knob<bool>? hidden = g.Master != null && g.Master.Tier != Tier.User && g.Master.Tier != Tier.Advanced ? g.Master : null;
+            Knob<bool>? hidden = g.Master != null && g.Master.Tier != Tier.User ? g.Master : null;
             Knob<bool>? off = null;
             foreach (Knob<bool> a in anc) if (!a.V) { off = a; break; }
             if (off == null && hidden != null && !hidden.V) off = hidden;
@@ -421,13 +412,16 @@ public sealed partial class KnobPanel
             {
                 Head(ref y);
                 string restart = off.Effect == Effect.Restart ? " (restart)" : "";
-                string text = ReferenceEquals(off, hidden)
-                    ? $"{off.Label} is off ({off.Key}=0 in cx.cfg) — click here to turn it back on{restart}."
-                    : $"{off.Label} is off — these settings apply once it is enabled in {off.Group.Category} » {off.Group.Submenu}{restart}.";
+                bool restore = ReferenceEquals(off, hidden) && off.Tier != Tier.Advanced;
+                string text = off.Tier == Tier.Advanced
+                    ? $"These settings are inactive because {off.Label} is off{restart}."
+                    : restore
+                        ? $"{off.Label} is off ({off.Key}=0 in cx.cfg) — click here to turn it back on{restart}."
+                        : $"{off.Label} is off — these settings apply once it is enabled in {off.Group.Category} » {off.Group.Submenu}{restart}.";
                 AddLines(rows, ref y, RowKind.Strip, text, noteW - 1.6f * Em, 0.6f * Em + 1f * Em);
                 Row st = rows[rows.Count - 1];
                 st.Slot = slot;
-                if (ReferenceEquals(off, hidden)) st.K = hidden;
+                if (restore) st.K = hidden;
             }
             string status = g.PanelStatus?.Invoke() ?? "";
             _statusText += status + ShowSig(g) + "\u0001";
@@ -438,34 +432,14 @@ public sealed partial class KnobPanel
             string section = "";
             foreach (Knob k in g.Knobs)
             {
-                if (k.Tier == Tier.Advanced) { adv += Hides(k) ? 0 : 1; continue; }
                 if (k.Tier != Tier.User || Hides(k)) continue;
                 if (k.Kind != KnobKind.Button && k.Kind != KnobKind.Link) _resettable = true;
                 Head(ref y);
                 AddSection(rows, ref y, k, ref section);
-                AddKnobRow(rows, ref y, k, k == g.Master, false, slot);
+                AddKnobRow(rows, ref y, k, k == g.Master, slot);
             }
         }
         _stripGates = stripGates.ToArray(); _stripWasOff = stripOff.ToArray();
-        if (adv > 0)
-        {
-            _resettable = true;
-            rows.Add(new Row { Kind = RowKind.Advanced, Text = AdvOpen ? AdvancedOpen : AdvancedClosed, Top = y, H = 0.8f * Em + 1.2f * Em + SmallLh });
-            y += rows[rows.Count - 1].H;
-            if (AdvOpen)
-                for (int slot = 0; slot < gs.Length; slot++)
-                {
-                    string section = "";
-                    bool headed = !shared;
-                    foreach (Knob k in gs[slot].Knobs)
-                    {
-                        if (k.Tier != Tier.Advanced || Hides(k)) continue;
-                        if (!headed) { AddHeading(rows, ref y, gs[slot].Title); headed = true; }
-                        AddSection(rows, ref y, k, ref section);
-                        AddKnobRow(rows, ref y, k, false, true, slot);
-                    }
-                }
-        }
         _gates = gates;
         Publish(rows, y);
     }
@@ -493,7 +467,7 @@ public sealed partial class KnobPanel
                 float labelW = LabelW(r);
                 if (r.Ctl != KnobKind.Button) r.Label = Wrap(Body, r.Text, labelW);
                 r.Help = r.HelpText.Length > 0 ? Wrap(Small, r.HelpText, labelW) : Array.Empty<string>();
-                r.H = RowH(r, false);
+                r.H = RowH(r);
                 if (r.Ctl == KnobKind.Slider) r.Value = FormatValue(r);
             }
             y += r.H;
@@ -508,16 +482,15 @@ public sealed partial class KnobPanel
         List.Clamp();
         _rows = rows;
         _grab = null; _editRow = null; _hoverRow = null; _confirm = null;
-        Tip.Cut();
     }
 
     /// <summary>A control row's height: its label and help lines with padding, at least the plain or the
-    /// helped minimum (an Advanced row is always compact).</summary>
-    private float RowH(Row r, bool adv)
+    /// helped minimum.</summary>
+    private float RowH(Row r)
     {
         float h = 2f * RowPadY + (r.Label.Length > 0 ? r.Label.Length : 1) * BodyLh
                   + (r.Help.Length > 0 ? 0.1f * Em + r.Help.Length * SmallLh : 0f);
-        float min = adv || r.Help.Length == 0 ? RowPlainH : RowMinH;
+        float min = r.Help.Length == 0 ? RowPlainH : RowMinH;
         return h < min ? min : h;
     }
 
@@ -546,18 +519,17 @@ public sealed partial class KnobPanel
         y += rows[rows.Count - 1].H;
     }
 
-    private void AddKnobRow(List<Row> rows, ref float y, Knob k, bool master, bool adv, int slot = 0)
+    private void AddKnobRow(List<Row> rows, ref float y, Knob k, bool master, int slot)
     {
-        var r = new Row { Kind = RowKind.Knob, K = k, Ctl = k.Kind, Text = k.Label, Top = y, Master = master, Adv = adv, Slot = slot };
-        r.HasMark = adv && k.Help.Length > 0;
+        var r = new Row { Kind = RowKind.Knob, K = k, Ctl = k.Kind, Text = k.Label, Top = y, Master = master, Slot = slot };
         r.Restart = k.Effect == Effect.Restart && k.Kind != KnobKind.Button && k.Kind != KnobKind.Link;
         r.CtlW = ControlW(r);
-        r.ExtraW = (r.HasMark && Small != null ? 0.4f * Em + Tooltip.MarkerW(Small) : 0f) + (r.Restart ? 0.5f * Em + BadgeW : 0f);
+        r.ExtraW = r.Restart ? 0.5f * Em + BadgeW : 0f;
         float labelW = LabelW(r);
         if (k.Kind != KnobKind.Button) r.Label = Wrap(Body, k.Label, labelW);
         if (k is KnobLink link) r.Help = Wrap(Small, link.Url, labelW + r.ExtraW);
-        else r.Help = !adv && k.Help.Length > 0 ? Wrap(Small, k.Help, labelW + r.ExtraW) : Array.Empty<string>();
-        r.H = RowH(r, adv) + (master ? MasterTop + MasterBottom : 0f);
+        else r.Help = k.Help.Length > 0 ? Wrap(Small, k.Help, labelW + r.ExtraW) : Array.Empty<string>();
+        r.H = RowH(r) + (master ? MasterTop + MasterBottom : 0f);
         r.Refresh();
         y += r.H;
         rows.Add(r);
@@ -582,7 +554,7 @@ public sealed partial class KnobPanel
     }
 
     /// <summary>The width a row's label wraps to: the column less the control, the gap, the master inset and the
-    /// marker / badge reserve.</summary>
+    /// badge reserve.</summary>
     internal float LabelW(Row r)
     {
         float w = ListInnerW() - r.CtlW - Gap - r.ExtraW - (r.Master ? 2f * MasterPadX : 0f);
@@ -715,8 +687,7 @@ public sealed partial class KnobPanel
         return SlotOff(r.Slot);
     }
 
-    /// <summary>A submenu holding an off-default User or Advanced row (the nav dot). Per frame: a field compare
-    /// per knob, nothing allocated.</summary>
+    /// <summary>Whether a submenu has a visible, off-default User row (the navigation dot).</summary>
     public static bool SubDirty(SubMenu s)
     {
         for (int i = 0; i < s.Groups.Length; i++) if (SubDirty(s.Groups[i])) return true;
@@ -730,7 +701,7 @@ public sealed partial class KnobPanel
         for (int i = 0; i < ks.Count; i++)
         {
             Knob k = ks[i];
-            if ((k.Tier == Tier.User || k.Tier == Tier.Advanced) && !k.IsDefault) return true;
+            if (k.Tier == Tier.User && !k.IsDefault && !Hides(k)) return true;
         }
         return false;
     }
@@ -825,10 +796,6 @@ public sealed partial class KnobPanel
         y0 = cy - CtlH * 0.5f; y1 = cy + CtlH * 0.5f;
     }
 
-    /// <summary>The <c>(?)</c> marker's left edge on an Advanced row (after the label's first line).</summary>
-    private float MarkX(Row r)
-        => RowLeft(r) + (Body != null && r.Label.Length > 0 ? UiText.Measure(Body, r.Label[0]) : 0f) + 0.4f * Em;
-
     private bool In(float mx, float my, float x0, float x1, float y0, float y1) => mx >= x0 && mx < x1 && my >= y0 && my < y1;
 
     /// <summary>The Reset to defaults box, top-right of the knob column head.</summary>
@@ -869,7 +836,6 @@ public sealed partial class KnobPanel
         }
         _pressed = true; _grab = null; _moving = false;
         Row? armed = _confirm; _confirm = null;
-        Tip.Cut();
         bool moved = _editRow != null && Commit();
         if (OverClose(mx, my)) { Close(); return true; }
         if (OverCollapse(mx, my)) { ToggleCollapse(); return true; }
@@ -888,13 +854,20 @@ public sealed partial class KnobPanel
         int s = NavAt(SubCol, _subs.Length, mx, my);
         if (s >= 0) { if (s != Sub) { SelectSub(s); Relayout(); } return true; }
         SubMenu? g0 = Sub >= 0 && Sub < _subs.Length ? _subs[Sub] : null;
-        if (OverReset(mx, my)) { if (g0 != null) foreach (KnobGroup g in g0.Groups) g.ResetRows(); LayoutRows(); return true; }
+        if (OverReset(mx, my))
+        {
+            foreach (Row row in _rows)
+                if (row.Kind == RowKind.Knob && row.K is { Tier: Tier.User } knob &&
+                    knob.Kind is not (KnobKind.Button or KnobKind.Link))
+                    knob.Reset();
+            LayoutRows();
+            return true;
+        }
         // A parent flipped from chat since the layout: the strip is stale, re-lay out before hit-testing.
         if (g0 != null && StripsStale()) LayoutRows();
         if (moved) return true;   // a list gained or lost an item: every row under it moved since the press was aimed
         Row? r = RowAt(mx, my, out float top);
         if (r == null) return true;
-        if (r.Kind == RowKind.Advanced) { AdvOpen = !AdvOpen; LayoutRows(); return true; }
         if (r.Kind == RowKind.Strip && r.K is Knob<bool> sw) { sw.Set(true); LayoutRows(); return true; }
         if (r.Kind != RowKind.Knob && r.Kind != RowKind.Channel && r.Kind != RowKind.Item) return true;
         if (Greyed(r)) return true;
@@ -1001,7 +974,7 @@ public sealed partial class KnobPanel
     }
 
     /// <summary>Motion: a header drag moves the panel, a grabbed slider or thumb tracks, the open list hovers;
-    /// otherwise the nav hover, the row hover and the marker hover for the tooltip. True when consumed (a drag)
+    /// otherwise the nav and row hover. True when consumed (a drag)
     /// or something to redraw changed.</summary>
     public bool MouseMove(float mx, float my)
     {
@@ -1019,14 +992,8 @@ public sealed partial class KnobPanel
         int hc = NavAt(Cats, Categories.Length, mx, my), hs = NavAt(SubCol, _subs.Length, mx, my);
         bool changed = hc != _hoverCat || hs != _hoverSub;
         _hoverCat = hc; _hoverSub = hs;
-        Row? r = RowAt(mx, my, out float top);
+        Row? r = RowAt(mx, my, out _);
         if (!ReferenceEquals(r, _hoverRow)) { _hoverRow = r; changed = true; }
-        if (r != null && r.HasMark && Small != null && r.K != null)
-        {
-            float x0 = MarkX(r), x1 = x0 + Tooltip.MarkerW(Small);
-            if (mx >= x0 && mx < x1) { Tip.Hover(r, r.K.Help, x0, top, top + r.H); return true; }
-        }
-        if (Tip.Leave()) changed = true;
         return changed && Contains(mx, my);
     }
 
@@ -1038,7 +1005,7 @@ public sealed partial class KnobPanel
         float step = WheelEm * Em;
         if (Cats.Contains(_lastMx, _lastMy)) { Cats.MouseWheel(dy, step); return true; }
         if (SubCol.Contains(_lastMx, _lastMy)) { SubCol.MouseWheel(dy, step); return true; }
-        if (List.Contains(_lastMx, _lastMy) || Contains(_lastMx, _lastMy)) { List.MouseWheel(dy, step); Tip.Cut(); return true; }
+        if (List.Contains(_lastMx, _lastMy) || Contains(_lastMx, _lastMy)) { List.MouseWheel(dy, step); return true; }
         return false;
     }
 
@@ -1264,13 +1231,12 @@ public sealed partial class KnobPanel
         skin.Flush();
     }
 
-    /// <summary>The open dropdown list and the tooltip, over everything the body pass drew.</summary>
+    /// <summary>The open dropdown list, over everything the body pass drew.</summary>
     private void EmitOver(VertexBatch b, Skin? skin)
     {
-        GlyphAtlas? body = Body, small = Small;
-        if (body == null || small == null) return;
+        GlyphAtlas? body = Body;
+        if (body == null) return;
         Drop.Draw(b, body, body.Ascent, C(ListBg), C(Selected), Tx, skin);
-        Tip.Draw(b, small, small.Ascent, C(ListBg), Tx, VpW, VpH, skin);
     }
 
     /// <summary>The panel itself: chrome, the three columns and their rows. <paramref name="rowArt"/> is the art of
@@ -1384,12 +1350,6 @@ public sealed partial class KnobPanel
                         UiText.Draw(b, small, r.Help[l], kx + Pad + 0.8f * em, sy0 + 0.5f * em + l * small.LineHeight + small.Ascent, Warn, colRight - 0.8f * em);
                     continue;
                 }
-                case RowKind.Advanced:
-                {
-                    Fill(b, kx + Pad, top + 0.8f * em, colRight, top + 0.8f * em + 1f, ColBorder);
-                    UiText.Draw(b, small, r.Text, kx + Pad, top + 1.4f * em + small.Ascent, ReferenceEquals(r, _hoverRow) ? Hi : Tx2, colRight);
-                    continue;
-                }
                 case RowKind.Channel:
                 {
                     r.Refresh();
@@ -1426,13 +1386,6 @@ public sealed partial class KnobPanel
                 float end = UiText.Draw(b, body, r.Label[l], left, lb, labelRgb, labelClip, alpha);
                 if (r.Master) UiText.Draw(b, body, r.Label[l], left + 1f, lb, labelRgb, labelClip, alpha);
                 if (l == 0) pen = end;
-            }
-            float base0 = rowTop + RowPadY + body.Ascent;
-            if (r.HasMark)
-            {
-                pen += 0.4f * em;
-                Tooltip.DrawMarker(b, small, pen, base0, ReferenceEquals(Tip.Key, r) ? Hi : Tx2);
-                pen += Tooltip.MarkerW(small);
             }
             if (r.Restart)
             {

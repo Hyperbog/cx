@@ -8,10 +8,10 @@ namespace CX.Ui;
 
 public sealed partial class KnobPanel
 {
-    /// <summary>Off-device proof: the tree (categories, submenus, rows without ChatOnly/Hidden, section headers),
+    /// <summary>Off-device proof: the tree (categories, submenus, User rows, section headers),
     /// each control's set through the registry, the per-motion slider apply, the text edit, Escape, the three
     /// independent scrolls, geometry that fits 1280×720 and 1920×1080 with no clipped label; then the semantics --
-    /// boxed master, greying, Advanced, Reset, badges, link copy, confirm, swatch channels, lists -- and a zero-alloc draw.</summary>
+    /// boxed master, greying, Reset, badges, link copy, confirm, swatch channels, lists -- and a zero-alloc draw.</summary>
     public static void SelfCheck(ExtenderLog log)
     {
         var check = new Checker(log);
@@ -19,15 +19,13 @@ public sealed partial class KnobPanel
         var body = new GlyphAtlas { LineHeight = 24, Ascent = 19, SpaceAdvance = 6f };
         var small = new GlyphAtlas { LineHeight = 19, Ascent = 15, SpaceAdvance = 5f };
         for (int cp = 0x20; cp < 0x180; cp++) { body.SetTestGlyph(cp, cp == ' ' ? 6f : 11f); small.SetTestGlyph(cp, cp == ' ' ? 5f : 8f); }
-        foreach (int cp in new[] { 0x2014, 0x21BB, 0x25B8, 0x25BE }) { body.SetTestGlyph(cp, 11f); small.SetTestGlyph(cp, 8f); }
+        foreach (int cp in new[] { 0x2014, 0x21BB }) { body.SetTestGlyph(cp, 11f); small.SetTestGlyph(cp, 8f); }
 
         long now = 0;
-        Func<long> realClock = Clock, realTipClock = Tooltip.Clock;
+        Func<long> realClock = Clock;
         Func<string, bool> realCopy = CopyText;
-        var realTiming = Tooltip.Timing;
-        Tooltip.Timing = () => (Tooltip.DelaySec, Tooltip.FadeInSec, Tooltip.FadeOutSec);
         string copied = "";
-        Clock = () => now; Tooltip.Clock = () => now;
+        Clock = () => now;
         CopyText = s => { copied = s; return true; };
         try
         {
@@ -48,7 +46,6 @@ public sealed partial class KnobPanel
             var col = g.Swatch("col", "Colour", 0x11223344u, help: "A swatch.");
             var size = g.Dropdown("size", "Sun shadow resolution", new[] { 512, 1024, 2048 }, 2048, effect: Effect.Restart, help: "Per-cascade map size.");
             var adv = g.Slider("lod", "Full-density radius", 5f, 200f, 1f, 40f, "m", Tier.Advanced, help: "Every blade draws inside this.");
-            var advNoHelp = g.Slider("lodmin", "Far density floor", 0.001f, 1f, 0.001f, 0.02f, tier: Tier.Advanced);
             var btn = g.Button("dump", "Dump next frame", () => { pressed++; statusN++; }, help: "Writes the frame's pass images.");
             var wipe = g.Button("wipe", "Forget every server", () => wiped++, help: "Click again to confirm.", confirm: true);
             bool inSession = true; int bound = 0;
@@ -81,12 +78,12 @@ public sealed partial class KnobPanel
             void PressBox(Row r) { Show(r); p.BoxRect(r, p.List.ToScreen(r.Top), out float x0, out float x1, out float y0, out float y1); Press((x0 + x1) * 0.5f, (y0 + y1) * 0.5f); }
             void PressToggle(Row r) { Show(r); p.ControlAnchor(r, p.List.ToScreen(r.Top), out float rr, out float cy); Press(rr - 5f, cy); }
 
-            // The tree: header note, status, the boxed master first, sections, User rows in order, the closed disclosure; no Advanced/ChatOnly/Hidden row.
+            // The tree: header note, status, the boxed master first, sections, User rows in order.
             check.Expect(p.Rows[0].Kind == RowKind.Note && p.Rows[1].Kind == RowKind.Status && p.Rows[1].Help.Length == 1 && p.Rows[1].Help[0] == "Running: check — 0", "the header note, then the status line");
             check.Expect(p.Rows[2].Kind == RowKind.Knob && p.Rows[2].K == g.Master && p.Rows[2].Master && p.Rows[2].H > 3.3f * FacePx + 0.8f * FacePx, "the master is the first knob row, boxed and taller by its margins");
             check.Expect(p.Rows[3].Kind == RowKind.Section && p.Rows[3].Text == "FIELD" && p.Rows[6].Text == "SHADOWS", "section headers appear where the section changes, upper-cased");
-            check.Expect(Count(RowKind.Knob) == 13 && Count(RowKind.Advanced) == 1 && !Has(adv) && !Has(advNoHelp) && !Has(chat), $"13 User rows, one closed disclosure, no Advanced / ChatOnly / Hidden row ({Count(RowKind.Knob)})");
-            check.Expect(p.Rows[p.Rows.Count - 1].Kind == RowKind.Advanced && p.Rows[p.Rows.Count - 1].Text == AdvancedClosed, "the disclosure is the last row, closed");
+            check.Expect(Count(RowKind.Knob) == 13 && !Has(adv) && !Has(chat) &&
+                         p.Rows[p.Rows.Count - 1].K == many, "only User rows appear, ending at the last User control");
             check.Expect(Find(RowKind.Strip) == null && !p.MasterOff, "parent and master on: no strip, nothing greyed");
             Row dr = R(dens);
             check.Expect(p.Greyed(R(face)) && !p.Greyed(dr), "a Disabled knob's row is greyed while everything else is live");
@@ -252,43 +249,24 @@ public sealed partial class KnobPanel
             PressBox(R(bind));
             check.Expect(!p.Greyed(R(bind)) && bound == 1, "Enabled back on: the row is live and the press fires");
 
-            // Advanced: hidden until disclosed; disclosed rows are compact; the marker only where there is help; hover shows the tooltip after the dwell.
-            Row advRow = p.Rows[p.Rows.Count - 1]; Show(advRow);
-            Press(p.List.X + p.Pad + 5f, p.List.ToScreen(advRow.Top) + advRow.H - 5f);
-            check.Expect(p.AdvOpen && Has(adv) && Has(advNoHelp) && !Has(chat), "pressing the disclosure reveals the Advanced rows and nothing else");
-            Row ar = R(adv), anr = R(advNoHelp);
-            check.Expect(ar.Adv && ar.HasMark && ar.Help.Length == 0 && ar.H < 3.3f * FacePx, "an Advanced row with help is compact, its help behind the marker");
-            check.Expect(anr.Adv && !anr.HasMark && anr.ExtraW == 0f, "an Advanced row without help has no marker");
-            check.Expect(ar.Label.Length == 2, $"a long Advanced label still wraps at 720p ({ar.Label.Length})");
-            Show(ar);
-            float hx = p.MarkX(ar) + 2f, hy = p.List.ToScreen(ar.Top) + 0.6f * p.Em;
-            p.MouseMove(hx, hy);
-            check.Expect(p.Tip.Hovering && ReferenceEquals(p.Tip.Key, ar) && !p.Tip.Visible, "hovering the marker starts the tooltip dwell");
-            now += (long)((Tooltip.DelaySec + 0.05f) * Stopwatch.Frequency);
-            check.Expect(p.Tip.Visible && p.Tip.Text == "Every blade draws inside this.", "after the dwell the row's help shows");
-            p.MouseMove(hx - 5f * p.Em, hy);
-            check.Expect(!p.Tip.Hovering, "leaving the marker hides it");
-            foreach (Row r in p.Rows) if (r.Adv) { Show(r); p.MouseMove(p.MarkX(r) + 2f, p.List.ToScreen(r.Top) + 0.6f * p.Em); check.Expect(p.Tip.Hovering == r.HasMark, "only a marked row hovers"); }
-            p.MouseMove(1f, 1f);
-            FitCheck("720p advanced");
-            // Reset to defaults: User + Advanced rows back, ChatOnly and Hidden untouched, the dots gone.
+            // Reset replaces visible User values while preserving internal tuning.
             adv.Set(90f); chat.Set(false);
             Knob hidden = g.Get("hidden")!; hidden.Parse("deadbeef");
             check.Expect(SubDirty(g) && R(dens).OffDefault, "off-default rows before the reset");
             p.ResetRect(out float rx0, out float rx1, out float ry0, out float ry1);
             Press((rx0 + rx1) * 0.5f, (ry0 + ry1) * 0.5f);
-            check.Expect(dens.IsDefault && far.IsDefault && shadow.IsDefault && tex.IsDefault && col.IsDefault && adv.IsDefault && size.IsDefault, "Reset restores every User and Advanced row");
-            check.Expect(!chat.V && hidden.Format() == "deadbeef", "Reset leaves ChatOnly and Hidden keys alone");
+            check.Expect(dens.IsDefault && far.IsDefault && shadow.IsDefault && tex.IsDefault && col.IsDefault && size.IsDefault, "Reset restores the visible User values");
+            check.Expect(adv.V == 90f && !chat.V && hidden.Format() == "deadbeef", "Reset preserves Advanced, ChatOnly, and Hidden values");
             foreach (Row r in p.Rows) if (r.Kind == RowKind.Knob) { r.Refresh(); check.Expect(!r.OffDefault, $"{r.K!.Key}: no dot after the reset"); }
             check.Expect(!SubDirty(g), "the submenu dot is gone after the reset");
             chat.Set(true); hidden.Parse("00000000");
             check.Expect(p.Rows[1].Help[0] == "Running: check — 3", "the status line follows the presses");
 
-            // A submenu change closes the disclosure; a status-only group is its status.
+            // A status-only group is its status.
             var z = new KnobGroup("cx-panelzero", "Controls", "Zero", null, null, true, Effect.Live, null, null, "", register: false);
             z.PanelStatus = () => "line one\nline two that is long enough to wrap in the column at seven twenty by twelve eighty for sure";
             p._subs = new[] { new SubMenu(g), new SubMenu(z) }; p.SelectSub(1); p.LayoutRows();
-            check.Expect(p.Sub == 1 && !p.AdvOpen && p.Rows.Count == 1 && p.Rows[0].Kind == RowKind.Status && p.Rows[0].Help.Length >= 3 && !p._resettable, "a zero-knob group renders its status as the whole body, no reset box");
+            check.Expect(p.Sub == 1 && p.Rows.Count == 1 && p.Rows[0].Kind == RowKind.Status && p.Rows[0].Help.Length >= 3 && !p._resettable, "a zero-knob group renders its status as the whole body, no reset box");
             // A ShowIf row: absent while its predicate says no, laid out once a pick turns it true.
             var cg = new KnobGroup("cx-panelshowif", "Controls", "ShowIf", null, null, true, Effect.Live, null, null, "", register: false);
             var pick = cg.Dropdown("pick", "Pick", new[] { "a", "b" }, "a", help: "Which one.");
@@ -300,6 +278,11 @@ public sealed partial class KnobPanel
             check.Expect(pick.V == "b" && Has(dep), "picking the choice it waits on lays the row out");
             p.PickChoice(R(pick), 0);
             check.Expect(!Has(dep), "...and picking away takes it out again");
+            dep.Set(0.8f);
+            check.Expect(!SubDirty(cg), "a hidden User value does not set the navigation dot");
+            p.ResetRect(out rx0, out rx1, out ry0, out ry1);
+            Press((rx0 + rx1) * 0.5f, (ry0 + ry1) * 0.5f);
+            check.Expect(MathF.Abs(dep.V - 0.8f) < 0.001f, "Reset preserves a User row hidden by ShowIf");
             // A shared submenu: each group under its heading, greyed by its own gate only; a chat-only master that is
             // off lays a strip that turns it back on; a diagnostics-only group earns no submenu.
             var sa = new KnobGroup("cx-sharea", "Controls", "Shared", "Enable A", "A's master.", true, Effect.Live, null, null, "", register: false, title: "Alpha");
@@ -309,7 +292,10 @@ public sealed partial class KnobPanel
             var bRow = sb.Toggle("y", "B row", true, help: "B help.");
             var diag = new KnobGroup("cx-sharediag", "Controls", "Diag", null, null, true, Effect.Live, null, null, "", register: false);
             diag.Toggle("probe", "probe", false, Tier.ChatOnly); diag.Status = () => "counters";
-            check.Expect(Shown(sa) && Shown(sb) && !Shown(diag), "a group with rows is shown; a ChatOnly-and-Status group is not");
+            var advancedOnly = new KnobGroup("cx-paneladvonly", "Controls", "Internal", null, null, true, Effect.Live, null, null, "", register: false);
+            advancedOnly.Toggle("flag", "Internal flag", true, Tier.Advanced);
+            check.Expect(Shown(sa) && Shown(sb) && Shown(z) && !Shown(diag) && !Shown(advancedOnly),
+                         "User rows and panel status earn submenus; chat diagnostics and Advanced-only controls do not");
             p._subs = new[] { new SubMenu(sa, sb) }; p.SelectSub(0); p.LayoutRows();
             check.Expect(Count(RowKind.Heading) == 2 && p.Rows[0].Kind == RowKind.Heading && p.Rows[0].Text == "Alpha", "a shared submenu heads each group with its title");
             check.Expect(!p.Rows.Exists(r => r.Kind == RowKind.Knob && ReferenceEquals(r.K, sb.Master)) && !p.Greyed(R(aRow)) && p.Greyed(R(bRow)), "B's chat-only master is no row; off, it greys B's rows only");
@@ -319,9 +305,19 @@ public sealed partial class KnobPanel
             check.Expect(sb.Master!.V && Find(RowKind.Strip) == null && !p.Greyed(R(bRow)), "a press on that strip turns the master back on");
             sa.Master!.Set(false);
             check.Expect(p.Greyed(R(aRow)) && !p.Greyed(R(bRow)), "A's master off greys A's rows, not B's");
+            var ag = new KnobGroup("cx-paneladvgate", "Controls", "Internal gate", "Enable internal gate", null, false,
+                                   Effect.Live, null, null, "", register: false, masterTier: Tier.Advanced);
+            var publicRow = ag.Toggle("x", "A User setting", true, help: "Depends on the internal gate.");
+            p._subs = new[] { new SubMenu(ag) }; p.SelectSub(0); p.LayoutRows();
+            Row? advStrip = Find(RowKind.Strip);
+            check.Expect(advStrip != null && advStrip.K == null && !Has(ag.Master!) && p.Greyed(R(publicRow)),
+                         "an off Advanced master greys dependent settings and only shows a read-only notice");
+            Show(advStrip!);
+            Press(p.List.X + p.Pad + 2f * p.Em, p.List.ToScreen(advStrip!.Top) + advStrip.H - 0.5f * p.Em);
+            check.Expect(!ag.Master!.V, "pressing the notice leaves the Advanced master off");
             p._subs = new[] { new SubMenu(g), new SubMenu(z) };
             p.SelectSub(0); p.LayoutRows();
-            check.Expect(p.Sub == 0 && Count(RowKind.Knob) == 13 && !p.AdvOpen, "back to the group: the disclosure is closed again");
+            check.Expect(p.Sub == 0 && Count(RowKind.Knob) == 13, "back to the group: the User rows return");
 
             // Independent scrolls: the knob list overflows at 720p, the nav columns do not; each wheel hits its own column.
             check.Expect(p.List.Overflows && !p.Cats.Overflows, "the row column scrolls; five categories fit");
@@ -337,9 +333,9 @@ public sealed partial class KnobPanel
             p.MouseDown(p.Cats.X + 10f, p.NavTop(p.Cats, 2) + 5f); p.MouseUp();
             check.Expect(p.Category == 2 && p.Sub == (p.Subs.Count > 0 ? 0 : -1), "a category press selects it and its first submenu");
             check.Expect(!p.MouseDown(1f, 1f), "a press off the panel is not consumed");
-            // 1080p: the same tree fits with nothing clipped, Advanced open.
+            // 1080p: the same tree fits with nothing clipped.
             p.Category = Array.IndexOf(KnobCategories, "Controls");
-            p.OpenAt(1920f, 1080f, FacePx, body, small); p._subs = new[] { new SubMenu(g) }; p.Sub = 0; p.AdvOpen = true; p.LayoutRows();
+            p.OpenAt(1920f, 1080f, FacePx, body, small); p._subs = new[] { new SubMenu(g) }; p.Sub = 0; p.LayoutRows();
             check.Expect(MathF.Abs(p.W - 1344f) < 0.5f && MathF.Abs(p.H - 810f) < 0.5f, "70%×75% of 1920×1080");
             FitCheck("1080p");
             // Escape closes; the face is the panel's own (a different Em re-lays out, nothing reads Metrics.Scale).
@@ -347,15 +343,13 @@ public sealed partial class KnobPanel
             p.OpenAt(1920f, 1080f, 30f, body, small); p._subs = new[] { new SubMenu(g) }; p.Sub = 0; p.LayoutRows();
             check.Expect(MathF.Abs(p.W - 1344f) < 0.5f && R(g.Master!).H >= 3.3f * 30f, "the window size is the viewport's; the rows scale with the panel face only");
 
-            // Draw allocates nothing, with every semantic on: strip, status, master off, dots, amber badge, Advanced open with
-            // the tooltip visible, the confirm armed, the copied flash, the channels expanded, the open list.
+            // Draw allocates nothing with the strip, status, master off, dots, amber badge, armed confirmation,
+            // copied flash, and expanded channels.
             pg.Master.Set(false); dens.Set(1f); size.Set(1024);
-            p.AdvOpen = true; p._expanded = col; p.LayoutRows();
+            p._expanded = col; p.LayoutRows();
             lr = R(link); Show(lr); Press(p.List.X + p.Pad + 5f, p.List.ToScreen(lr.Top) + 5f);
             PressBox(R(wipe));
-            ar = R(adv); Show(ar); p.MouseMove(p.MarkX(ar) + 2f, p.List.ToScreen(ar.Top) + 0.6f * p.Em);
-            now += (long)((Tooltip.DelaySec + 0.05f) * Stopwatch.Frequency);
-            check.Expect(p.Tip.Visible && p.ConfirmArmed(R(wipe)) && p.CopiedShown(lr) && p.MasterOff && Count(RowKind.Channel) == 4 && Find(RowKind.Strip) != null, "everything is on for the draw");
+            check.Expect(p.ConfirmArmed(R(wipe)) && p.CopiedShown(lr) && p.MasterOff && Count(RowKind.Channel) == 4 && Find(RowKind.Strip) != null, "everything is on for the draw");
             var vb = new VertexBatch(body.SolidU, body.SolidV);
             p.Emit(vb);
             check.Expect(vb.VertexCount > 100, "the draw emitted the panel");
@@ -434,7 +428,7 @@ public sealed partial class KnobPanel
             check.Expect(ld == 0, $"100 draws of a list with an item being typed allocate nothing ({ld} bytes)");
             p.CancelEdit(); p.Close();
         }
-        finally { Clock = realClock; Tooltip.Clock = realTipClock; Tooltip.Timing = realTiming; CopyText = realCopy; }
+        finally { Clock = realClock; CopyText = realCopy; }
 
         // Consumer mode: two columns, a modal panel with a header button, rows from a Source; every
         // edit reaches the consumer through its callbacks and never touches the registry.

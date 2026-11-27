@@ -48,7 +48,7 @@ public sealed partial class KnobPanel
     public void ToggleCollapse()
     {
         Collapsed = !Collapsed;
-        Drop.Close(); Tip.Cut(); _grab = null; _hoverRow = null;
+        Drop.Close(); _grab = null; _hoverRow = null;
         if (!Collapsed) { Y = Window.ClampAxis(Y, H, VpH); Place(); }
     }
 
