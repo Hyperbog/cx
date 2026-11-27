@@ -316,6 +316,7 @@ public sealed unsafe class CameraService : IExtenderService
     // ADR-002: the eye may follow the animated rig, never world collision.
     private static IntPtr _eyePlayer, _eyeArea;
     private static bool _eyeTracking;
+    private static JumpEyeContinuity _jumpEye;
     private static int _eyeTraceCount, _eyeLastAnim = -1;
     private static bool _eyeLastTracked;
 
@@ -336,11 +337,9 @@ public sealed unsafe class CameraService : IExtenderService
     private static bool AnimatedEyeAllowed(bool dialog, bool airborne, bool validArea) =>
         !dialog && !airborne && validArea;
 
-    private static bool RestoreAnimatedEye(IntPtr player, float dt, bool dialog, bool airborne, Vector3 fallback,
+    private static bool RestoreAnimatedEye(IntPtr player, IntPtr area, float dt, bool dialog, bool airborne, Vector3 fallback,
                                            ref Vector3 eye, ref Quaternion q)
     {
-        IntPtr module = Module();
-        IntPtr area = module == IntPtr.Zero ? IntPtr.Zero : new CNWCModule(module).CurrentArea.Ptr;
         if (!AnimatedEyeAllowed(dialog, airborne, area != IntPtr.Zero))
         {
             if (_eyeTracking || _eyePlayer != IntPtr.Zero) ResetAnimatedEye();
@@ -448,11 +447,22 @@ public sealed unsafe class CameraService : IExtenderService
             // The free camera owns the pose; the frame it lets go is a weld (snap + cut) like any gate's.
             // _fovWritten is kept: Leave() puts the entry angle back, which is the layer's last write or nothing.
             FreeCameraService.Frame(c, g, dt);
-            if (FreeCameraService.Active) { if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye(); _welded = true; _wantNoCollision = true; _offsetOn = false; _arm = 1f; return; }
+            if (FreeCameraService.Active)
+            {
+                _jumpEye = default;
+                if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye();
+                _welded = true; _wantNoCollision = true; _offsetOn = false; _arm = 1f;
+                return;
+            }
         }
         if (g != Gate.Active)
         {
-            if (g != Gate.NotWorldCamera) { JumpPreview.Reset(); if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye(); }
+            if (g != Gate.NotWorldCamera)
+            {
+                _jumpEye = default;
+                JumpPreview.Reset();
+                if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye();
+            }
             // Off is enterable by the free camera: the seed it reads (Rendered) must be the engine's pose, not a stale lag.
             if (g == Gate.Off) { RestoreFov(c); _sYaw = _yaw; _outPitch = _pitch; }
             _welded = true; _offsetOn = _wantNoCollision = false; _arm = 1f; return;
@@ -493,6 +503,7 @@ public sealed unsafe class CameraService : IExtenderService
         Quaternion q = Pose(_sYaw, pitch);
         if (mode != 2 || !m.FirstPersonActive)
         {
+            _jumpEye = default;
             JumpPreview.Reset();
             if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye();
         }
@@ -524,7 +535,12 @@ public sealed unsafe class CameraService : IExtenderService
                     if (!fpDialog) HeadBoneCamera.TurnCharacter(player, q);
                     FirstPersonWorldGuard.ClearCameraContact();
                     airborne = JumpPositionService.AirborneFor(player);
-                    tracked = RestoreAnimatedEye(player, dt, fpDialog, airborne, fallback, ref eye, ref q);
+                    IntPtr module = Module();
+                    IntPtr area = module == IntPtr.Zero ? IntPtr.Zero : new CNWCModule(module).CurrentArea.Ptr;
+                    tracked = RestoreAnimatedEye(player, area, dt, fpDialog, airborne, fallback, ref eye, ref q);
+                    if (fpDialog) _jumpEye = default;
+                    else eye = _jumpEye.Apply(cam, self, player, area, airborne, tracked,
+                        actor, eye, _sYaw, Environment.TickCount64);
                 }
                 else
                 {
@@ -552,10 +568,11 @@ public sealed unsafe class CameraService : IExtenderService
                 }
                 if (mode == 2 && !fpDialog && JumpFramingTrace.Enabled && _log is { } log)
                     JumpFramingTrace.Solved(log, cam, c.DbCameraId, player, airborne, tracked,
-                        actor, eye, q, eyeFov, _fovRead, c.ViewAngle);
+                        actor, eye, q, eyeFov, _fovRead, c.ViewAngle, _jumpEye.Recovering, _sYaw);
                 return;
             }
         }
+        _jumpEye = default;
         if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye();
         Vector3 pos = _sFocus + _sDist * Forward(q);
         float offX = m.OffsetX.V, offY = m.OffsetY.V;
@@ -1008,6 +1025,7 @@ public sealed unsafe class CameraService : IExtenderService
         check.Expect(!TryVerticalFov(90f, 0f, out _) && !TryVerticalFov(90f, float.PositiveInfinity, out _) &&
             !TryVerticalFov(float.NaN, 1f, out _) && !TryVerticalFov(180f, 1f, out _),
             "Driving leaves the lens alone until both angle and aspect are valid");
+        JumpEyeContinuity.SelfCheck(check);
         log.Info(check.Ok ? "CameraService.SelfCheck: passed" : "CameraService.SelfCheck: FAILED");
     }
 }

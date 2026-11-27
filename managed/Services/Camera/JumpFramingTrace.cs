@@ -10,10 +10,10 @@ namespace CX.Services.Camera;
 internal static class JumpFramingTrace
 {
     private const int LineLimit = 96;
-    private const int AirIntervalMs = 100, SettledDelayMs = 150, MaxSampleGapMs = 250;
+    private const int AirIntervalMs = 100, SettledDelayMs = 200, MaxSampleGapMs = 250;
 
     private readonly record struct Solve(long Tick, long Frame, IntPtr Camera, DbId DbCamera, IntPtr Player,
-        bool Airborne, bool Tracked, Vector3 Actor, Vector3 Eye, Vector3 Look, float Requested, float Before, float After);
+        bool Airborne, bool Tracked, Vector3 Actor, Vector3 Eye, Vector3 Look, float Requested, float Before, float After, bool Recovering, float Yaw);
 
     private readonly record struct Projection(string? Source, float Fov, float Aspect, int Width, int Height,
         float ScaleX, float ScaleY, Vector3 EyeDifference);
@@ -30,11 +30,11 @@ internal static class JumpFramingTrace
 
     internal static void Solved(ExtenderLog log, IntPtr camera, DbId dbCamera, IntPtr player, bool airborne,
                                 bool tracked, Vector3 actor, Vector3 eye, Quaternion rotation,
-                                float requested, float before, float after)
+                                float requested, float before, float after, bool recovering, float yaw)
     {
         long frame = dbCamera.Value != 0 ? RenderSnapshot.FrameSeq : -1;
         var solve = new Solve(Environment.TickCount64, frame, camera, dbCamera, player, airborne, tracked,
-            actor, eye, -CameraService.Forward(rotation), requested, before, after);
+            actor, eye, -CameraService.Forward(rotation), requested, before, after, recovering, yaw);
         if (frame < 0)
             Observe(log, new Sample(solve, new Projection("native-unavailable", 0f, 0f, 0, 0, 0f, 0f, default)));
         else
@@ -96,7 +96,7 @@ internal static class JumpFramingTrace
             Write(log, "landing", sample, previous, true);
             _settledAt = current.Tick + SettledDelayMs;
         }
-        else if (_settledAt != 0 && current.Tick >= _settledAt)
+        else if (_settledAt != 0 && current.Tick >= _settledAt && !current.Recovering)
         {
             Write(log, "settled", sample, previous, continuous);
             _settledAt = 0;
@@ -115,7 +115,7 @@ internal static class JumpFramingTrace
         string view = p.Source is null or "native-unavailable"
             ? p.Source ?? "missing"
             : FormattableString.Invariant($"{p.Source} drawFov={p.Fov:F3} viewport={p.Width}x{p.Height} aspect={p.Aspect:F5} scale={p.ScaleX:F5},{p.ScaleY:F5} drawEyeDelta={p.EyeDifference.Length():F4}");
-        log.Info(FormattableString.Invariant($"[efpjump] jump={_jump} phase={phase} frame={s.Frame} t_ms={s.Tick} tracked={s.Tracked} fov={s.Requested:F3}/{s.Before:F3}/{s.After:F3} look={s.Look.X:F4},{s.Look.Y:F4},{s.Look.Z:F4} eyeOffset={offset.X:F4},{offset.Y:F4},{offset.Z:F4} actorStep={actorStep.X:F4},{actorStep.Y:F4},{actorStep.Z:F4} offsetStep={offsetStep.X:F4},{offsetStep.Y:F4},{offsetStep.Z:F4} view={view}"));
+        log.Info(FormattableString.Invariant($"[efpjump] jump={_jump} phase={phase} frame={s.Frame} t_ms={s.Tick} tracked={s.Tracked} fov={s.Requested:F3}/{s.Before:F3}/{s.After:F3} recovering={s.Recovering} yaw={s.Yaw:F3} look={s.Look.X:F4},{s.Look.Y:F4},{s.Look.Z:F4} eyeOffset={offset.X:F4},{offset.Y:F4},{offset.Z:F4} actorStep={actorStep.X:F4},{actorStep.Y:F4},{actorStep.Z:F4} offsetStep={offsetStep.X:F4},{offsetStep.Y:F4},{offsetStep.Z:F4} view={view}"));
         _lines++;
     }
 }
