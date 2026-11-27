@@ -69,7 +69,7 @@ internal static class AttackCameraFollow
         float.IsFinite(x.X) && float.IsFinite(x.Y) && float.IsFinite(x.Z) && float.IsFinite(x.W);
     private static bool Melee(int animation) => animation is >= 0xc9 and <= 0xcd;
 
-    private static void Reset(bool changed = false)
+    internal static void Reset(bool changed = false)
     {
         if (changed) _rigResets++;
         _player = _root = IntPtr.Zero;

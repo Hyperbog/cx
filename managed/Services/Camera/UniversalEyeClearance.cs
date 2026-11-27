@@ -75,6 +75,14 @@ internal static class UniversalEyeClearance
         log.Info("Fix14D-C3C: validated adaptive CORE clearance active; no fixed animation cap; all limbs/weapons visible");
     }
 
+    internal static void ResetPresentation()
+    {
+        _validPlayer = _validRoot = IntPtr.Zero;
+        _lastValidTick = 0;
+        _lastHeadRelative = _lastTorsoRelative = Vector3.Zero;
+        _lastSpan = 0f;
+    }
+
     private static bool Finite(in Vector3 v) =>
         float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
     private static bool Finite(in Quaternion q) =>

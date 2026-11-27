@@ -45,7 +45,7 @@ internal static class AnimationCameraMotion
         float.IsFinite(q.X) && float.IsFinite(q.Y) && float.IsFinite(q.Z) && float.IsFinite(q.W);
     private static bool SelectedAttack(int anim) => anim is >= 0xc9 and <= 0xcd;
 
-    private static void Reset(bool modelChange = false)
+    internal static void Reset(bool modelChange = false)
     {
         if (modelChange) _modelResets++;
         _player = _root = IntPtr.Zero;

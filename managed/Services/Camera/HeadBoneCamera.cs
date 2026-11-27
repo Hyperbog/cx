@@ -99,17 +99,23 @@ internal static class HeadBoneCamera
         _lastMode = -1;
     }
 
+    internal static void ResetPresentation()
+    {
+        Clear(false);
+        ResetMovementTether();
+    }
+
     /// <summary>
     /// Runs BEFORE existing Fix9/11 visual motion and Fix12 wall guard. Camera
     /// drives creature facing in the horizontal plane, but NEVER inherits head rotations.
     /// </summary>
-    internal static void Apply(IntPtr player, float dt, ref Vector3 eye, Quaternion rotation)
+    internal static bool Apply(IntPtr player, float dt, ref Vector3 eye, Quaternion rotation, bool turnCharacter = true)
     {
         if (player == IntPtr.Zero || !Finite(eye) || !Finite(rotation))
-        { Clear(false); return; }
-        TurnCharacter(player, rotation);
+        { Clear(false); return false; }
+        if (turnCharacter) TurnCharacter(player, rotation);
         int mode = Mode.V;
-        if (mode == 0) { Clear(false); return; }
+        if (mode == 0) { Clear(false); return false; }
         // The head's WORLD position already includes the native creature jump.
         // Adding a second visual correction to the docked eye causes an apparent
         // double-jump and extra forward speed. The camera follows the native body
@@ -119,7 +125,7 @@ internal static class HeadBoneCamera
             _offset = Vector3.Zero;
             _neutral = _havePrevious = false;
             _root = IntPtr.Zero; // Re-calibrate once on landing or model changes.
-            return;
+            return false;
         }
         if (mode != _lastMode || player != _player)
         { Clear(_player != IntPtr.Zero); _player = player; _lastMode = mode; }
@@ -131,7 +137,7 @@ internal static class HeadBoneCamera
         _lastEye = eye; _havePrevious = true;
         if (!PoseService.TryCameraRig(player, out var rig) || !rig.HasHead || rig.Root == IntPtr.Zero
             || !Finite(rig.HeadWorld) || !Finite(rig.HeadLocal) || !Finite(rig.RootRotation))
-        { _missing++; _offset = Vector3.Zero; return; }
+        { _missing++; _offset = Vector3.Zero; return false; }
         if (_root != rig.Root)
         {
             if (_root != IntPtr.Zero) _resets++;
@@ -164,7 +170,7 @@ internal static class HeadBoneCamera
             if (forward.LengthSquared() < 0.001f)
                 forward = Vector3.Transform(Vector3.UnitY, rig.RootRotation);
             forward.Z = 0f;
-            if (forward.LengthSquared() < 0.001f) { _missing++; return; }
+            if (forward.LengthSquared() < 0.001f) { _missing++; return false; }
             forward = Vector3.Normalize(forward);
             Vector3 desiredEye = rig.HeadWorld + forward * Forward.V + Vector3.UnitZ * Up.V;
             correction = desiredEye - eye;
@@ -175,18 +181,19 @@ internal static class HeadBoneCamera
             if (EyeLock.V)
             {
                 if (Finite(desiredEye) && correction.LengthSquared() <= EyeLockMaxError.V * EyeLockMaxError.V)
-                { eye = desiredEye; _offset = Vector3.Zero; return; }
-                _missing++; _offset = Vector3.Zero; return;
+                { eye = desiredEye; _offset = Vector3.Zero; return true; }
+                _missing++; _offset = Vector3.Zero; return false;
             }
         }
-        if (!Finite(correction)) { _missing++; _offset = Vector3.Zero; return; }
+        if (!Finite(correction)) { _missing++; _offset = Vector3.Zero; return false; }
         float distance = correction.Length();
         if (distance > MaxShift.V)
         { correction *= MaxShift.V / distance; _clamped++; }
         float blend = 1f - MathF.Exp(-Response.V * dt);
         _offset = Vector3.Lerp(_offset, correction, blend);
-        if (!Finite(_offset)) { _offset = Vector3.Zero; _missing++; return; }
+        if (!Finite(_offset)) { _offset = Vector3.Zero; _missing++; return false; }
         eye += _offset * (Strength.V / 100f);
+        return Finite(eye);
     }
 
     /// <summary>

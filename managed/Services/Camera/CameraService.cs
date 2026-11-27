@@ -140,7 +140,7 @@ public sealed unsafe class CameraService : IExtenderService
         UniversalEyeClearance.Configure(log);
         KnobSurface.Note(AttackCameraFollow.Diagnostics);
         KnobSurface.Note(FirstPersonWorldGuard.Diagnostics);
-        log.Info("EFP M11: fixed actor-root eye; collision handled at keyboard/native walking boundary");
+        log.Info("EFP M11 combat candidate: ADR-002 animation-aware eye; no Driving wall retreat; native movement unchanged");
         KnobSurface.Note(HeadBoneCamera.Diagnostics);
         KnobSurface.Note(JumpPositionService.Diagnostics);
         SceneRay.Init();
@@ -286,6 +286,79 @@ public sealed unsafe class CameraService : IExtenderService
         }
     }
 
+    // ADR-002: the eye may follow the animated rig, never world collision.
+    private static IntPtr _eyePlayer, _eyeArea;
+    private static bool _eyeTracking;
+    private static int _eyeTraceCount, _eyeLastAnim = -1;
+    private static bool _eyeLastTracked;
+
+    private static void ResetAnimatedEye()
+    {
+        HeadBoneCamera.ResetPresentation();
+        AnimationCameraMotion.Reset();
+        AttackCameraFollow.Reset();
+        UniversalEyeClearance.ResetPresentation();
+        _eyePlayer = _eyeArea = IntPtr.Zero;
+        _eyeTracking = false;
+    }
+
+    private static bool FiniteEye(Vector3 p, Quaternion q) =>
+        float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z) &&
+        float.IsFinite(q.X) && float.IsFinite(q.Y) && float.IsFinite(q.Z) && float.IsFinite(q.W) &&
+        float.IsFinite(q.LengthSquared()) && q.LengthSquared() > 0.5f;
+
+    private static bool AnimatedEyeAllowed(bool dialog, bool airborne, bool validArea) =>
+        !dialog && !airborne && validArea;
+
+    private static bool RestoreAnimatedEye(IntPtr player, float dt, bool dialog, Vector3 fallback,
+                                           ref Vector3 eye, ref Quaternion q)
+    {
+        IntPtr module = Module();
+        IntPtr area = module == IntPtr.Zero ? IntPtr.Zero : new CNWCModule(module).CurrentArea.Ptr;
+        if (!AnimatedEyeAllowed(dialog, JumpPositionService.AirborneFor(player), area != IntPtr.Zero))
+        {
+            if (_eyeTracking || _eyePlayer != IntPtr.Zero) ResetAnimatedEye();
+            eye = fallback;
+            return false;
+        }
+        if (_eyePlayer != player || _eyeArea != area)
+        {
+            ResetAnimatedEye();
+            _eyePlayer = player; _eyeArea = area;
+        }
+        Quaternion aim = q;
+        // Keep the historical calibrated model dock as a sampling reference;
+        // the direct head position replaces it, never adds world translation twice.
+        if (!HeadBoneCamera.Apply(player, dt, ref eye, q, turnCharacter: false))
+        {
+            if (_eyeTracking) ResetAnimatedEye();
+            eye = fallback;
+            return false;
+        }
+        AnimationCameraMotion.Apply(true, player, dt, ref eye, ref q);
+        AttackCameraFollow.Apply(player, dt, ref eye, ref q);
+        HeadBoneCamera.MaintainHeadClearance(player, ref eye, q);
+        // The old locomotion tether and world retreat remain bypassed in Driving.
+        // Keep the native jump/drive behavior and let local model clearance run last.
+        if (!FiniteEye(eye, q))
+        {
+            ResetAnimatedEye();
+            eye = fallback; q = aim;
+            return false;
+        }
+        _eyeTracking = true;
+        return true;
+    }
+
+    private static void TraceAnimatedEye(IntPtr player, bool tracked, Vector3 fallback, Vector3 eye, Vector3 shift)
+    {
+        if (!ExtenderLog.Enabled || _log == null || _eyeTraceCount >= 120) return;
+        int anim = new CNWCObject(player).Animation;
+        if (_eyeTraceCount != 0 && anim == _eyeLastAnim && tracked == _eyeLastTracked) return;
+        _eyeLastAnim = anim; _eyeLastTracked = tracked; _eyeTraceCount++;
+        _log.Info(FormattableString.Invariant($"[efpcombat] anim={anim} tracked={(tracked ? 1 : 0)} eyeDelta={Vector3.Distance(fallback, eye):F3} modelShift={shift.Length():F3} samples={_eyeTraceCount}/120"));
+    }
+
     private static Vector3 PlayerModelAnchor(IntPtr player)
     {
         Vector3 actor = new CNWCObject(player).Position;
@@ -350,11 +423,11 @@ public sealed unsafe class CameraService : IExtenderService
             // The free camera owns the pose; the frame it lets go is a weld (snap + cut) like any gate's.
             // _fovWritten is kept: Leave() puts the entry angle back, which is the layer's last write or nothing.
             FreeCameraService.Frame(c, g, dt);
-            if (FreeCameraService.Active) { _welded = true; _wantNoCollision = true; _offsetOn = false; _arm = 1f; return; }
+            if (FreeCameraService.Active) { if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye(); _welded = true; _wantNoCollision = true; _offsetOn = false; _arm = 1f; return; }
         }
         if (g != Gate.Active)
         {
-            if (g != Gate.NotWorldCamera) JumpPreview.Reset();
+            if (g != Gate.NotWorldCamera) { JumpPreview.Reset(); if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye(); }
             // Off is enterable by the free camera: the seed it reads (Rendered) must be the engine's pose, not a stale lag.
             if (g == Gate.Off) { RestoreFov(c); _sYaw = _yaw; _outPitch = _pitch; }
             _welded = true; _offsetOn = _wantNoCollision = false; _arm = 1f; return;
@@ -393,7 +466,11 @@ public sealed unsafe class CameraService : IExtenderService
             _sPitch + m.PitchCurve.V * (_sDist - m.PitchRef.V), lo, hi);
         _outPitch = pitch;
         Quaternion q = Pose(_sYaw, pitch);
-        if (mode != 2 || !m.FirstPersonActive) JumpPreview.Reset();
+        if (mode != 2 || !m.FirstPersonActive)
+        {
+            JumpPreview.Reset();
+            if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye();
+        }
         // Use the player actor's *world position*, not the orbit's follow focus:
         // turning or pitching cannot move the camera in a circle around the feet.
         // This is a calibrated eye height, NOT a head-bone attachment.
@@ -412,31 +489,29 @@ public sealed unsafe class CameraService : IExtenderService
                 Vector3 feet = PlayerModelAnchor(player);
                 Vector3 eye = feet + Vector3.UnitZ * m.EyeHeight.V
                               - back * m.EyeForward.V;
-                // Fix8: camera-only first-person attack motion. Never touches
-                // the player, jump motor, reticle, or input controls.
                 FirstPersonVisibility.Publish(player);
-        if (mode == 2)
-        {
-            // Single stable eye anchor. No head/attack/tether translation, no
-            // yaw-dependent orbit, no wall ray retreat, no collision smoothing.
-            // Native world movement alone moves the camera.
-            eye = new CNWCObject(player).Position + Vector3.UnitZ * m.EyeHeight.V;
-            if (!NpcDialogActive) HeadBoneCamera.TurnCharacter(player, q);
-            FirstPersonWorldGuard.ClearCameraContact();
-        }
-        else
-        {
-            HeadBoneCamera.Apply(player, dt, ref eye, q);
-            AnimationCameraMotion.Apply(true, player, dt, ref eye, ref q);
-            AttackCameraFollow.Apply(player, dt, ref eye, ref q);
-            HeadBoneCamera.MaintainHeadClearance(player, ref eye, q);
-            HeadBoneCamera.KeepMovementModelBehindEye(player, dt, ref eye, q);
-            FirstPersonWorldGuard.Resolve(player, ref eye, q);
-        }
-        // Only the local render model may move to clear its own head/torso.
-        Vector3 localVisualCorrection = UniversalEyeClearance.Apply(player, eye, q,
-            mode == 2 ? Vector3.Zero : FirstPersonWorldGuard.LastEyeCorrection, out bool validatedCore);
-        FirstPersonVisibility.PublishEyeCollision(player, localVisualCorrection, validatedCore);
+                Vector3 fallback = new CNWCObject(player).Position + Vector3.UnitZ * m.EyeHeight.V;
+                bool tracked = false;
+                if (mode == 2)
+                {
+                    if (!fpDialog) HeadBoneCamera.TurnCharacter(player, q);
+                    FirstPersonWorldGuard.ClearCameraContact();
+                    tracked = RestoreAnimatedEye(player, dt, fpDialog, fallback, ref eye, ref q);
+                }
+                else
+                {
+                    HeadBoneCamera.Apply(player, dt, ref eye, q);
+                    AnimationCameraMotion.Apply(true, player, dt, ref eye, ref q);
+                    AttackCameraFollow.Apply(player, dt, ref eye, ref q);
+                    HeadBoneCamera.MaintainHeadClearance(player, ref eye, q);
+                    HeadBoneCamera.KeepMovementModelBehindEye(player, dt, ref eye, q);
+                    FirstPersonWorldGuard.Resolve(player, ref eye, q);
+                }
+                // Same-frame render-only body/attachment clearance against the final eye.
+                Vector3 localVisualCorrection = UniversalEyeClearance.Apply(player, eye, q,
+                    mode == 2 ? Vector3.Zero : FirstPersonWorldGuard.LastEyeCorrection, out bool validatedCore);
+                FirstPersonVisibility.PublishEyeCollision(player, localVisualCorrection, validatedCore);
+                if (mode == 2) TraceAnimatedEye(player, tracked, fallback, eye, localVisualCorrection);
                 c.Place(eye, q);
                 _pos = eye;
                 _offsetOn = false;
@@ -448,6 +523,7 @@ public sealed unsafe class CameraService : IExtenderService
                 return;
             }
         }
+        if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye();
         Vector3 pos = _sFocus + _sDist * Forward(q);
         float offX = m.OffsetX.V, offY = m.OffsetY.V;
         _offsetOn = offX != 0f || offY != 0f;
@@ -883,6 +959,11 @@ public sealed unsafe class CameraService : IExtenderService
         float v = 0, x = 0;
         for (int i = 0; i < 240; i++) x = SmoothDamp(x, 1f, ref v, 0.2f, 1f / 60f);
         check.Expect(MathF.Abs(x - 1f) < 1e-3f, "the spring settles on its target");
+        check.Expect(AnimatedEyeAllowed(false, false, true) && !AnimatedEyeAllowed(true, false, true)
+            && !AnimatedEyeAllowed(false, true, true) && !AnimatedEyeAllowed(false, false, false),
+            "ADR-002: animated eye only in valid grounded non-dialogue context");
+        check.Expect(FiniteEye(Vector3.Zero, Quaternion.Identity) && !FiniteEye(new Vector3(float.NaN, 0, 0), Quaternion.Identity)
+            && !FiniteEye(Vector3.Zero, default), "ADR-002: reject invalid eye transforms");
         log.Info(check.Ok ? "CameraService.SelfCheck: passed" : "CameraService.SelfCheck: FAILED");
     }
 }
