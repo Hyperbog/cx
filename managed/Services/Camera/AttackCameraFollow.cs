@@ -51,8 +51,8 @@ internal static class AttackCameraFollow
     {
         G = KnobGroup.Declare("attackfollow", "Controls", "Camera", order: 518,
                               title: "First-person attack tracking");
-        Enabled = G.Toggle("enabled", "Track attack animation with the camera", true,
-            help: "Adds measured head and torso translation during melee attacks; never changes character movement.");
+        Enabled = G.Toggle("enabled", "Track additional attack motion with the camera", false,
+            help: "Optional extra melee head/torso camera translation; disabled by default to avoid overlapping the animated eye and torso response. Never changes character movement.");
         Strength = G.Slider("strength", "Attack tracking strength", 0f, 100f, 5f, 60f, "%",
             help: "Blend of the actual animated translation transferred to the eye. Start at 60%. ");
         Travel = G.Slider("travel", "Maximum forward tracking", 0f, 0.5f, 0.025f, 0.28f, "m",
