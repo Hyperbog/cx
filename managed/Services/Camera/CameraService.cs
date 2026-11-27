@@ -111,6 +111,8 @@ public sealed unsafe class CameraService : IExtenderService
         _log = log;
         CameraKnobs.SelfCheck(log);
         SelfCheck(log);
+        if (Settings.Raw("driving.fov") != null && Settings.Raw("driving.hfov") == null)
+            log.Always("EFP: Driving starts at 90 degrees horizontal. Set driving.hfov to change it. The old driving.fov key is retained for rollback.");
         if (!EngineLayout.Require(log, "CameraService", "CAurBehavior", "CAurBehaviorCameraFollow", "CNWCModule",
                                   "CClientExoAppInternal", "CClientOptions", "Camera", "CNWCObject")) return;
         if (!SymbolMap.Require(log, "CameraService", SymbolMap.CameraFollowControl, SymbolMap.AppManager,
@@ -249,6 +251,23 @@ public sealed unsafe class CameraService : IExtenderService
         internal float ViewAngle => CX.Alloy.Renderer.On ? DbCamera.ViewAngleOf(_db) : new EngCamera(_cam).ViewAngle;
         internal DbId DbCameraId => _db;
 
+        internal bool TryDrivingFov(float horizontal, out float vertical)
+        {
+            SeamFrame.ReadViewport(out float x, out float y, out float w, out float h);
+            if (_db.Value != 0)
+            {
+                GuiUpscale.Ask(_db, x, y, w, h, SeamFrame.ReadGuiScale(), out var upscale);
+                if (DbCamera.TryViewRect(_db, x, y, w, h, in upscale, out _, out _, out _, out _, out float aspect, out _))
+                    return TryVerticalFov(horizontal, aspect, out vertical);
+                vertical = float.NaN;
+                return false;
+            }
+
+            var camera = new EngCamera(_cam);
+            if (camera.ViewW != 0f || camera.ViewH != 0f) { w = camera.ViewW; h = camera.ViewH; }
+            return TryVerticalFov(horizontal, w > 0f && h > 0f ? w / h : float.NaN, out vertical);
+        }
+
         internal void Place(Vector3 pos, Quaternion rot)
         {
             if (!CX.Alloy.Renderer.On) { var c = new EngCamera(_cam); c.Rot = rot; c.Pos = pos; return; }
@@ -264,6 +283,14 @@ public sealed unsafe class CameraService : IExtenderService
             if (CX.Alloy.Renderer.On) DbCamera.SetViewAngle(_db, degrees);
             else new EngCamera(_cam).ViewAngle = degrees;
         }
+    }
+
+    internal static bool TryVerticalFov(float horizontal, float aspect, out float vertical)
+    {
+        vertical = float.NaN;
+        if (!(horizontal > 0f && horizontal < 180f && aspect > 0f) || !float.IsFinite(aspect)) return false;
+        vertical = MathF.Atan2(MathF.Tan(horizontal * Deg * 0.5f), aspect) * (2f / Deg);
+        return vertical > 0f && vertical < 180f;
     }
 
     /// <summary>One-shot: the layer had a pose to write and no live camera to write it to (DB mode only).</summary>
@@ -518,8 +545,11 @@ public sealed unsafe class CameraService : IExtenderService
                 _arm = 1f;
                 _wantNoCollision = true;
                 float eyeFov = m.Fov.V;
-                c.SetViewAngle(eyeFov);
-                _fovWritten = eyeFov;
+                if (mode != 2 || c.TryDrivingFov(eyeFov, out eyeFov))
+                {
+                    c.SetViewAngle(eyeFov);
+                    _fovWritten = eyeFov;
+                }
                 if (mode == 2 && !fpDialog && JumpFramingTrace.Enabled && _log is { } log)
                     JumpFramingTrace.Solved(log, cam, c.DbCameraId, player, airborne, tracked,
                         actor, eye, q, eyeFov, _fovRead, c.ViewAngle);
@@ -536,8 +566,11 @@ public sealed unsafe class CameraService : IExtenderService
         c.Place(pos, q);
         _pos = pos;
         // No magic zero (ADR 0025): the slider is written whenever the layer drives the mode.
-        float fov = m.Fov.V;
-        c.SetViewAngle(fov); _fovWritten = fov;
+        if (mode != 2)
+        {
+            float fov = m.Fov.V;
+            c.SetViewAngle(fov); _fovWritten = fov;
+        }
     }
 
     /// <summary>The mode's master went off, or the mode changed into one whose master is off, with the layer's
@@ -927,7 +960,7 @@ public sealed unsafe class CameraService : IExtenderService
     {
         CameraModeKnobs? m = _mode is >= 0 and < 3 ? CameraModes.ByMode[_mode] : null;
         string knobs = m == null ? "" :
-            Inv($"; {m.G.Name}: fov {m.Fov.V:0.#} lag {m.PositionLag:0.##}/{m.RotationLag:0.##}/{m.ZoomLag:0.##} pitchcurve {m.PitchCurve.V:0.##}@{m.PitchRef.V:0.#}")
+            Inv($"; {m.G.Name}: {(_mode == 2 ? "hfov" : "fov")} {m.Fov.V:0.#} lag {m.PositionLag:0.##}/{m.RotationLag:0.##}/{m.ZoomLag:0.##} pitchcurve {m.PitchCurve.V:0.##}@{m.PitchRef.V:0.#}")
           + Inv($" offset {m.OffsetX.V:0.##} {m.OffsetY.V:0.##}")
           + (_offsetOn ? Inv($" arm {_arm:0.00} (margin {Walls.Margin.V:0.##} in {Walls.ArmIn.V:0.#} out {Walls.ArmOut.V:0.#} radius {Walls.ArmRadius.V:0.##})") : "");
         string recenter = m == null ? "" : !m.Recenter.V ? "; recenter off" :
@@ -967,6 +1000,14 @@ public sealed unsafe class CameraService : IExtenderService
             "ADR-002: animated eye only in valid grounded non-dialogue context");
         check.Expect(FiniteEye(Vector3.Zero, Quaternion.Identity) && !FiniteEye(new Vector3(float.NaN, 0, 0), Quaternion.Identity)
             && !FiniteEye(Vector3.Zero, default), "ADR-002: reject invalid eye transforms");
+        check.Expect(TryVerticalFov(90f, 16f / 9f, out float wide) && MathF.Abs(wide - 58.7155f) < 0.001f &&
+            TryVerticalFov(90f, 4f / 3f, out float standard) && MathF.Abs(standard - 73.7398f) < 0.001f &&
+            TryVerticalFov(90f, 32f / 9f, out float ultrawide) && MathF.Abs(ultrawide - 31.4173f) < 0.001f &&
+            TryVerticalFov(120f, 9f / 16f, out float portrait) && portrait > 140f && portrait < 180f,
+            "Driving preserves horizontal FOV as the viewport aspect changes");
+        check.Expect(!TryVerticalFov(90f, 0f, out _) && !TryVerticalFov(90f, float.PositiveInfinity, out _) &&
+            !TryVerticalFov(float.NaN, 1f, out _) && !TryVerticalFov(180f, 1f, out _),
+            "Driving leaves the lens alone until both angle and aspect are valid");
         log.Info(check.Ok ? "CameraService.SelfCheck: passed" : "CameraService.SelfCheck: FAILED");
     }
 }

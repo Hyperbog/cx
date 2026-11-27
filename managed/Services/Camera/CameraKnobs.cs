@@ -31,6 +31,7 @@ internal static class CameraKnobs
     }
 
     internal const float FovMin = 10f, FovMax = 120f;
+    internal const float DrivingHorizontalFovDefault = 90f;
 
     /// <summary>Off-device, read-only (a set would arm the writer against the user's real file): the six groups
     /// declare in panel order, the per-mode defaults differ where the spec says, the FOV magic zero is gone from
@@ -54,6 +55,8 @@ internal static class CameraKnobs
         var fov = KnobGroup.Find("chase.fov") as Knob<float>;
         check.Expect(fov != null && fov == CameraModes.Chase.Fov && fov.Default == 45f && fov.Min == FovMin && fov.Max == FovMax, "chase.fov is the 10-120 slider defaulting to 45");
         check.Expect(fov!.TryParse("60", out float v) && v == 60f && CameraModes.TopDown.Fov != fov, "/chase fov 60 parses and names the chase row only");
+        check.Expect(CameraModes.Driving.Fov.Key == "driving.hfov" && CameraModes.Driving.Fov.Default == DrivingHorizontalFovDefault &&
+                     KnobGroup.Find("driving.fov") == null, "Driving reads the horizontal key and leaves the old vertical key available for rollback");
         check.Expect(CameraModes.Chase.Drive.Default && !CameraModes.TopDown.Drive.Default && CameraModes.Driving.Drive.Default
           && CameraModes.Chase.Recenter.Default && !CameraModes.TopDown.Recenter.Default, "drive and recenter default off for top-down only");
         check.Expect(CameraModes.Chase.Face.Default && !CameraModes.TopDown.Face.Default && !CameraModes.Driving.Face.Default
@@ -154,8 +157,11 @@ public sealed class CameraModeKnobs
                           help: "Holds the view for a repeatable measurement. -1 = off.");
         PinPitch = G.Slider("pinpitch", "Pinned tilt", -1f, 180f, 1f, -1f, "deg", Tier.ChatOnly, help: "-1 = off.");
         PinDist = G.Slider("pindist", "Pinned distance", -1f, 100f, 0.5f, -1f, "m", Tier.ChatOnly, help: "-1 = off.");
-        Fov = G.Slider("fov", "Field of view", CameraKnobs.FovMin, CameraKnobs.FovMax, 1f, 45f, "deg",
-                       help: mode == 2 ? "Controls how much of the world fits vertically on screen. Higher values show a wider view." : "Vertical field of view. The game's own is 45.");
+        Fov = mode == 2
+            ? G.Slider("hfov", "Horizontal field of view", CameraKnobs.FovMin, CameraKnobs.FovMax, 1f,
+                CameraKnobs.DrivingHorizontalFovDefault, "deg", help: "Sets the viewing angle across the screen. Wider angles stretch scenery near the edges. The default is 90°.")
+            : G.Slider("fov", "Field of view", CameraKnobs.FovMin, CameraKnobs.FovMax, 1f, 45f, "deg",
+                help: "Vertical field of view. The game's own is 45.");
         PitchCurve = G.Slider("pitchcurve", "Tilt down when zoomed out", -10f, 10f, 0.5f, 0f, "deg/m", Tier.Advanced,
                               help: "Degrees of extra tilt per metre of zoom past the reference distance. Negative lowers the angle instead. 0 leaves the tilt where you put it.");
         PitchRef = G.Slider("pitchref", "Tilt reference distance", 1f, 60f, 1f, 10f, "m", Tier.ChatOnly);

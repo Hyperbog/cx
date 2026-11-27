@@ -302,6 +302,26 @@ public static unsafe class DbCamera
         => Matrix4x4.CreateTranslation(-up.OffX / 100f, -up.OffY / 100f, 0f)
          * Matrix4x4.CreateScale(up.Scale, up.Scale, 1f);
 
+    internal static bool TryViewRect(DbId cam, float vpX, float vpY, float vpW, float vpH, in ViewUpscale up,
+                                     out float x, out float y, out float w, out float h, out float aspect, out float extentH)
+    {
+        int i = cam.Index;
+        bool ownRect = SceneDb.CamViewW[i] != 0f || SceneDb.CamViewH[i] != 0f;
+        if (ownRect && up.Valid) { x = up.X; y = up.Y; w = up.W; h = up.H; }
+        else if (ownRect) { x = SceneDb.CamViewX[i]; y = SceneDb.CamViewY[i]; w = SceneDb.CamViewW[i]; h = SceneDb.CamViewH[i]; }
+        else { x = vpX; y = vpY; w = vpW; h = vpH; }
+        if (!(w > 0f && h > 0f) || !float.IsFinite(w) || !float.IsFinite(h))
+        {
+            aspect = extentH = 0f;
+            return false;
+        }
+        // With no rect of its own the draw rect stays global. A GUI upscale can still supply the lens aspect and ortho extent.
+        bool useUpscale = !ownRect && up.Valid && up.W > 0f && up.H > 0f;
+        aspect = useUpscale ? up.W / up.H : w / h;
+        extentH = useUpscale ? up.H * up.Scale : h;
+        return aspect > 0f && float.IsFinite(aspect);
+    }
+
     /// <summary>This camera's whole view state -- what <c>Camera::RenderScene</c> derives before it renders:
     /// viewport, aspect, projection (perspective or the ortho branch a view angle of 0 takes), view matrix and
     /// depth range, with <paramref name="up"/>'s rect and ortho box applied. The GUI model term is the
@@ -312,22 +332,8 @@ public static unsafe class DbCamera
         v = default;
         if (!SceneDb.Cameras.Valid(cam)) return false;
         int i = cam.Index;
-        float rx, ry, rw, rh, aspect, extentH;
-        if (SceneDb.CamViewW[i] == 0f && SceneDb.CamViewH[i] == 0f)
-        {
-            // No rect of its own: the view keeps the draw rect, and an upscale changes only the ortho box.
-            rx = vpX; ry = vpY; rw = vpW; rh = vpH;
-            if (rw <= 0f || rh <= 0f) return false;
-            if (up.Valid && up.W > 0f && up.H > 0f) { aspect = up.W / up.H; extentH = up.H * up.Scale; }
-            else { aspect = rw / rh; extentH = rh; }
-        }
-        else
-        {
-            if (up.Valid) { rx = up.X; ry = up.Y; rw = up.W; rh = up.H; }
-            else { rx = SceneDb.CamViewX[i]; ry = SceneDb.CamViewY[i]; rw = SceneDb.CamViewW[i]; rh = SceneDb.CamViewH[i]; }
-            if (rw <= 0f || rh <= 0f) return false;
-            aspect = rw / rh; extentH = rh;
-        }
+        if (!TryViewRect(cam, vpX, vpY, vpW, vpH, in up, out float rx, out float ry,
+            out float rw, out float rh, out float aspect, out float extentH)) return false;
         // The engine skips a view that lies wholly off the screen (Camera.c:3031-3037: it ends the scene,
         // bumps the external-animate counter and returns without rendering). A panel dragged off the edge is
         // the case, and drawing it would cost a full view for nothing.
