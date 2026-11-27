@@ -859,8 +859,6 @@ public sealed unsafe class PoseService : IExtenderService
         Bones bones = default;
         PoseRig.FindBones(gob, root, RigOf(gob, IntPtr.Zero), ref bones);
         if (bones.Torso == IntPtr.Zero) return false;
-        // Camera reads can follow a position setter before the next animation compose.
-        if (PoseRig.Db) _ = DbAnim.ObjectWorld(PoseRig.Obj(gob));
         PoseRig.World(root, out Vector3 rootWorld, out Quaternion rootQuat);
         PoseRig.World(bones.Torso, out Vector3 torsoWorld, out Quaternion torsoQuat);
         if (!float.IsFinite(rootWorld.X) || !float.IsFinite(rootWorld.Y) || !float.IsFinite(rootWorld.Z)
