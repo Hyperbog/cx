@@ -138,7 +138,6 @@ public sealed unsafe class CameraService : IExtenderService
         KnobSurface.Note(FirstPersonVisibility.Diagnostics);
         FirstPersonModelProbe.Attach(log);
         UniversalEyeClearance.Configure(log);
-        KnobSurface.Note(AttackCameraFollow.Diagnostics);
         KnobSurface.Note(FirstPersonWorldGuard.Diagnostics);
         log.Info("EFP M11 combat candidate: ADR-002 animation-aware eye; no Driving wall retreat; native movement unchanged");
         KnobSurface.Note(HeadBoneCamera.Diagnostics);
@@ -296,7 +295,6 @@ public sealed unsafe class CameraService : IExtenderService
     {
         HeadBoneCamera.ResetPresentation();
         AnimationCameraMotion.Reset();
-        AttackCameraFollow.Reset();
         UniversalEyeClearance.ResetPresentation();
         _eyePlayer = _eyeArea = IntPtr.Zero;
         _eyeTracking = false;
@@ -336,7 +334,6 @@ public sealed unsafe class CameraService : IExtenderService
             return false;
         }
         AnimationCameraMotion.Apply(true, player, dt, ref eye, ref q);
-        AttackCameraFollow.Apply(player, dt, ref eye, ref q);
         HeadBoneCamera.MaintainHeadClearance(player, ref eye, q);
         // The old locomotion tether and world retreat remain bypassed in Driving.
         // Keep the native jump/drive behavior and let local model clearance run last.
@@ -502,7 +499,6 @@ public sealed unsafe class CameraService : IExtenderService
                 {
                     HeadBoneCamera.Apply(player, dt, ref eye, q);
                     AnimationCameraMotion.Apply(true, player, dt, ref eye, ref q);
-                    AttackCameraFollow.Apply(player, dt, ref eye, ref q);
                     HeadBoneCamera.MaintainHeadClearance(player, ref eye, q);
                     HeadBoneCamera.KeepMovementModelBehindEye(player, dt, ref eye, q);
                     FirstPersonWorldGuard.Resolve(player, ref eye, q);

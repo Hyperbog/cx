@@ -27,7 +27,7 @@ internal static class CameraKnobs
 {
     internal static void Declare()
     {
-        _ = CameraModes.ByMode; _ = Walls.G; _ = FreeCam.G; _ = TabTarget.G; _ = AnimationCameraSettings.G; _ = FirstPersonVisibility.G; _ = AttackCameraFollow.G; _ = FirstPersonWorldGuard.G; _ = HeadBoneCamera.G;
+        _ = CameraModes.ByMode; _ = Walls.G; _ = FreeCam.G; _ = TabTarget.G; _ = AnimationCameraSettings.G; _ = FirstPersonVisibility.G; _ = FirstPersonWorldGuard.G; _ = HeadBoneCamera.G;
     }
 
     internal const float FovMin = 10f, FovMax = 120f;
