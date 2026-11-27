@@ -247,6 +247,7 @@ public sealed unsafe class CameraService : IExtenderService
 
         internal Vector3 Pos => CX.Alloy.Renderer.On ? DbCamera.PosOf(_db) : new EngCamera(_cam).Pos;
         internal float ViewAngle => CX.Alloy.Renderer.On ? DbCamera.ViewAngleOf(_db) : new EngCamera(_cam).ViewAngle;
+        internal DbId DbCameraId => _db;
 
         internal void Place(Vector3 pos, Quaternion rot)
         {
@@ -308,12 +309,12 @@ public sealed unsafe class CameraService : IExtenderService
     private static bool AnimatedEyeAllowed(bool dialog, bool airborne, bool validArea) =>
         !dialog && !airborne && validArea;
 
-    private static bool RestoreAnimatedEye(IntPtr player, float dt, bool dialog, Vector3 fallback,
+    private static bool RestoreAnimatedEye(IntPtr player, float dt, bool dialog, bool airborne, Vector3 fallback,
                                            ref Vector3 eye, ref Quaternion q)
     {
         IntPtr module = Module();
         IntPtr area = module == IntPtr.Zero ? IntPtr.Zero : new CNWCModule(module).CurrentArea.Ptr;
-        if (!AnimatedEyeAllowed(dialog, JumpPositionService.AirborneFor(player), area != IntPtr.Zero))
+        if (!AnimatedEyeAllowed(dialog, airborne, area != IntPtr.Zero))
         {
             if (_eyeTracking || _eyePlayer != IntPtr.Zero) ResetAnimatedEye();
             eye = fallback;
@@ -487,13 +488,16 @@ public sealed unsafe class CameraService : IExtenderService
                 Vector3 eye = feet + Vector3.UnitZ * m.EyeHeight.V
                               - back * m.EyeForward.V;
                 FirstPersonVisibility.Publish(player);
-                Vector3 fallback = new CNWCObject(player).Position + Vector3.UnitZ * m.EyeHeight.V;
+                Vector3 actor = new CNWCObject(player).Position;
+                Vector3 fallback = actor + Vector3.UnitZ * m.EyeHeight.V;
+                bool airborne = false;
                 bool tracked = false;
                 if (mode == 2)
                 {
                     if (!fpDialog) HeadBoneCamera.TurnCharacter(player, q);
                     FirstPersonWorldGuard.ClearCameraContact();
-                    tracked = RestoreAnimatedEye(player, dt, fpDialog, fallback, ref eye, ref q);
+                    airborne = JumpPositionService.AirborneFor(player);
+                    tracked = RestoreAnimatedEye(player, dt, fpDialog, airborne, fallback, ref eye, ref q);
                 }
                 else
                 {
@@ -516,6 +520,9 @@ public sealed unsafe class CameraService : IExtenderService
                 float eyeFov = m.Fov.V;
                 c.SetViewAngle(eyeFov);
                 _fovWritten = eyeFov;
+                if (mode == 2 && !fpDialog && JumpFramingTrace.Enabled && _log is { } log)
+                    JumpFramingTrace.Solved(log, cam, c.DbCameraId, player, airborne, tracked,
+                        actor, eye, q, eyeFov, _fovRead, c.ViewAngle);
                 return;
             }
         }

@@ -2,6 +2,7 @@ using System;
 using System.Numerics;
 using System.Threading;
 using CX.Framework;
+using CX.Services.Camera;
 
 namespace CX.Alloy.Db;
 
@@ -146,6 +147,7 @@ public static class RenderSnapshot
             FrameHoist.FoldFog(f.Views[k].Scene, in f.Hoist, out f.Views[k].Fog);
             if (f.Views[k].World && f.Views[k].Perspective) ReachFog(ref f.Views[k]);
         }
+        JumpFramingTrace.Published(f);
         Fold?.Invoke(f);
         SceneDb.Objects.TakeDirty();
         SceneDb.Parts.TakeDirty();
