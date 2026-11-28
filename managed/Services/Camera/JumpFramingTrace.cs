@@ -27,12 +27,15 @@ internal static class JumpFramingTrace
     private static long _nextAirSample, _settledAt;
 
     internal static bool Enabled => ExtenderLog.Enabled && _lines < LineLimit;
+    internal static bool CaptureEnabled => Enabled || JumpTimingTrace.Active;
 
     internal static void Solved(ExtenderLog log, IntPtr camera, DbId dbCamera, IntPtr player, bool airborne,
                                 bool tracked, Vector3 actor, Vector3 eye, Quaternion rotation,
                                 float requested, float before, float after)
     {
         long frame = dbCamera.Value != 0 ? RenderSnapshot.FrameSeq : -1;
+        JumpTimingTrace.Mark("solve", actor, eye, -CameraService.Forward(rotation),
+            x: airborne ? 1 : 0, y: tracked ? 1 : 0, z: after, frame: frame);
         var solve = new Solve(Environment.TickCount64, frame, camera, dbCamera, player, airborne, tracked,
             actor, eye, -CameraService.Forward(rotation), requested, before, after);
         if (frame < 0)
@@ -48,7 +51,7 @@ internal static class JumpFramingTrace
     {
         var log = _pendingLog;
         _pendingLog = null;
-        if (log == null || !Enabled || _pending.Frame != frame.Index) return;
+        if (log == null || !CaptureEnabled || _pending.Frame != frame.Index) return;
 
         int world = -1;
         for (int i = 0; i < frame.ViewCount; i++)
@@ -64,10 +67,13 @@ internal static class JumpFramingTrace
             ref var view = ref frame.Views[world];
             bool sameCamera = view.Camera == _pending.DbCamera;
             string source = sameCamera ? "matched" : "other-camera";
+            JumpTimingTrace.Mark(sameCamera ? "draw_match" : "draw_other", view.CamPos, _pending.Eye,
+                new Vector3(view.W, view.H, view.Fovy), x: view.Proj.M11, y: view.Proj.M22, frame: frame.Index);
             projection = new Projection(source, view.Fovy, view.Aspect, view.W, view.H,
                 view.Proj.M11, view.Proj.M22, sameCamera ? view.CamPos - _pending.Eye : new Vector3(float.NaN));
         }
-        Observe(log, new Sample(_pending, projection));
+        if (world < 0) JumpTimingTrace.Mark("draw_missing", frame: frame.Index);
+        if (Enabled) Observe(log, new Sample(_pending, projection));
     }
 
     private static void Observe(ExtenderLog log, in Sample sample)

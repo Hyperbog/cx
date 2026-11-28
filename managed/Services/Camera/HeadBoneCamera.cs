@@ -143,6 +143,12 @@ internal static class HeadBoneCamera
             if (_root != IntPtr.Zero) _resets++;
             _root = rig.Root; _neutral = false; _offset = Vector3.Zero;
         }
+        if (ExtenderLog.Enabled)
+        {
+            Vector3 rootWorld = rig.HeadWorld - Vector3.Transform(rig.HeadLocal, rig.RootRotation);
+            Vector3 torsoWorld = rootWorld + Vector3.Transform(rig.TorsoLocal, rig.RootRotation);
+            JumpTimingTrace.Mark("rig", rootWorld, torsoWorld, rig.HeadWorld, x: mode);
+        }
         _samples++;
         Vector3 correction;
         if (mode == 1)

@@ -35,12 +35,24 @@ internal static class JumpPreview
             return false;
         if (kind == KeyDown)
         {
-            if (repeat == 0) Interlocked.Exchange(ref _spaceEdge, 1);
+            if (repeat == 0)
+            {
+                int previous = Interlocked.Exchange(ref _spaceEdge, 1);
+                JumpTimingTrace.Key(previous);
+            }
             return true;
         }
         return kind == KeyUp;
     }
 
-    internal static bool Take() => Interlocked.Exchange(ref _spaceEdge, 0) != 0;
-    internal static void Reset() => Interlocked.Exchange(ref _spaceEdge, 0);
+    internal static bool Take()
+    {
+        bool pressed = Interlocked.Exchange(ref _spaceEdge, 0) != 0;
+        if (pressed) JumpTimingTrace.Mark("consume");
+        return pressed;
+    }
+    internal static void Reset()
+    {
+        if (Interlocked.Exchange(ref _spaceEdge, 0) != 0) JumpTimingTrace.Mark("edge_reset");
+    }
 }

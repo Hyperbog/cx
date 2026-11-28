@@ -362,8 +362,11 @@ public sealed unsafe class CameraService : IExtenderService
             eye = fallback;
             return false;
         }
+        JumpTimingTrace.Mark("eye_head", eye);
         AnimationCameraMotion.Apply(true, player, dt, ref eye, ref q);
+        JumpTimingTrace.Mark("eye_anim", eye);
         HeadBoneCamera.MaintainHeadClearance(player, ref eye, q);
+        JumpTimingTrace.Mark("eye_clear", eye);
         // The old locomotion tether and world retreat remain bypassed in Driving.
         // Keep the native jump/drive behavior and let local model clearance run last.
         if (!FiniteEye(eye, q))
@@ -525,6 +528,7 @@ public sealed unsafe class CameraService : IExtenderService
                     if (!fpDialog) HeadBoneCamera.TurnCharacter(player, q);
                     FirstPersonWorldGuard.ClearCameraContact();
                     airborne = JumpPositionService.AirborneFor(player);
+                    if (!fpDialog) JumpTimingTrace.Mark("model", feet, actor, eye, x: dt, y: airborne ? 1 : 0);
                     tracked = RestoreAnimatedEye(player, dt, fpDialog, fallback, ref eye, ref q);
                 }
                 else
@@ -551,7 +555,9 @@ public sealed unsafe class CameraService : IExtenderService
                     c.SetViewAngle(eyeFov);
                     _fovWritten = eyeFov;
                 }
-                if (mode == 2 && !fpDialog && JumpFramingTrace.Enabled && _log is { } log)
+                if (mode == 2 && !fpDialog)
+                    JumpTimingTrace.Mark("visual_clearance", localVisualCorrection, eye, actor, x: validatedCore ? 1 : 0);
+                if (mode == 2 && !fpDialog && JumpFramingTrace.CaptureEnabled && _log is { } log)
                     JumpFramingTrace.Solved(log, cam, c.DbCameraId, player, airborne, tracked,
                         actor, eye, q, eyeFov, _fovRead, c.ViewAngle);
                 return;

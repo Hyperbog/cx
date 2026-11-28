@@ -54,10 +54,16 @@ internal static unsafe class JumpPositionService
     private static ExtenderLog? _trace;
     private static long _launchAt, _nextWalkSample;
     private static float _nativeWalkZ;
-    internal static void ConfigureTrace(ExtenderLog log) => _trace = log;
+    internal static void ConfigureTrace(ExtenderLog log)
+    {
+        _trace = log;
+        JumpTimingTrace.Configure(log);
+    }
 
     private static void Trace(string reason, Vector3 position)
     {
+        JumpTimingTrace.Mark(reason, position, new Vector3(_floor, _groundZ, _expectedZ),
+            new Vector3(_rise, _velocity, _airTime));
         if (_trace == null) return;
         double sinceMs = _launchAt == 0 ? 0d
             : (Stopwatch.GetTimestamp() - _launchAt) * 1000d / Stopwatch.Frequency;
@@ -105,6 +111,7 @@ internal static unsafe class JumpPositionService
 
     internal static void Tick(float dt, bool worldCameraActive)
     {
+        JumpTimingTrace.Pump();
         try { Step(dt, worldCameraActive); }
         catch (Exception)
         {
@@ -118,6 +125,7 @@ internal static unsafe class JumpPositionService
 
     private static void Step(float dt, bool worldCameraActive)
     {
+        JumpTimingTrace.Mark("raw_dt", x: dt, y: _airborne ? 1 : 0, z: _airTime);
         IntPtr module = CameraService.Module();
         IntPtr player = CameraService.PlayerCreature();
         if (_airborne && (_module != module || _creature != player))
@@ -132,6 +140,7 @@ internal static unsafe class JumpPositionService
             && !FreeCameraService.Active;
         if (!allowed)
         {
+            JumpTimingTrace.Mark("gate_closed");
             if (_airborne && player == _creature && module == _module)
                 Land(player, restore: true);
             JumpPreview.Reset();
@@ -139,6 +148,7 @@ internal static unsafe class JumpPositionService
         }
         if (!(dt > 0f && dt < 0.12f))
         {
+            JumpTimingTrace.Mark("invalid_dt", x: dt);
             if (_airborne) Land(player, restore: true);
             JumpPreview.Reset();
             return;
@@ -149,6 +159,8 @@ internal static unsafe class JumpPositionService
         Vector3 current = new CNWCObject(player).Position;
         if (!Finite(current)) { _airborne = false; JumpPreview.Reset(); return; }
         bool press = JumpPreview.Take();
+        JumpTimingTrace.Mark("step", current, new Vector3(_rise, _velocity, _airTime),
+            new Vector3(_floor, _groundZ, _expectedZ), x: dt, y: press ? 1 : 0, z: _airborne ? 1 : 0);
         if (!_airborne && !press)
         {
             TrackGroundSpeed(current, dt);
@@ -284,10 +296,25 @@ internal static unsafe class JumpPositionService
         // its desired movement point are updated in this local experiment.
         var c = new CNWCCreature(player);
         Vec3 n = new() { X = target.X, Y = target.Y, Z = target.Z };
+        if (JumpTimingTrace.Active) ObservePosition("write_before", player, target);
         c.SetPosition(VectorArg.Of(&n));
         ref Vector3 desired = ref c.DesiredPos;
         desired = target;
         _expectedZ = target.Z;
+        if (JumpTimingTrace.Active) ObservePosition("write_after", player, target);
+    }
+
+    private static void ObservePosition(string kind, IntPtr player, Vector3 target)
+    {
+        try { JumpTimingTrace.Mark(kind, new CNWCObject(player).Position, target,
+            new Vector3(_rise, _velocity, _airTime)); }
+        catch (Exception) { /* Observations never alter the motor. */ }
+    }
+
+    internal static void BeforeWalk(IntPtr creature)
+    {
+        if (!JumpTimingTrace.Active || !AirborneFor(creature) || CameraService.Module() != _module) return;
+        ObservePosition("walk_before", creature, new Vector3(_air.Position.X, _air.Position.Y, _expectedZ));
     }
 
     private static void Land(IntPtr player, bool restore)
@@ -314,6 +341,8 @@ internal static unsafe class JumpPositionService
             CameraService.Module() != _module) return;
         Vector3 actual = new CNWCObject(creature).Position;
         if (!Finite(actual)) return;
+        JumpTimingTrace.Mark("walk_native", actual, new Vector3(_air.Position.X, _air.Position.Y, _expectedZ),
+            new Vector3(_floor, _groundZ, _airTime));
         _nativeWalkZ = actual.Z;
         Vector2 nativeXY = new(actual.X, actual.Y);
         _nativeWalkStepXY = _haveAcceptedWalk

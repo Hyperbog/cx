@@ -42,6 +42,8 @@ public sealed unsafe class JumpWalkBridgeService : IExtenderService
     [UnmanagedCallersOnly]
     private static int OnWalkUpdateLocation(IntPtr creature)
     {
+        try { JumpPositionService.BeforeWalk(creature); }
+        catch (Exception) { /* Observation only. */ }
         int result = (*_next)(creature);
         try { JumpPositionService.AfterWalk(creature); }
         catch (Exception) { /* area changes can invalidate a creature mid-frame */ }
