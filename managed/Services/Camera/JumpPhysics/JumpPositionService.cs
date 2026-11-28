@@ -41,6 +41,7 @@ internal static unsafe class JumpPositionService
     private static Vector2 _lastGroundXY, _groundVelocity;
     private static bool _haveGroundSample;
     private static int _airSteerFrames, _airBlockedSteps, _walkAtLaunch;
+    private static bool _airBlockReported;
     // J3: previous accepted native ground proxy, not our airborne write.
     // A slope check catches feedback loops that accumulate in small (<0.45) steps.
     private static Vector2 _lastAcceptedWalkXY;
@@ -101,6 +102,9 @@ internal static unsafe class JumpPositionService
     private const float MaxWorldDrop = 3.5f;
     // Tiny tolerance for projection jitter at takeoff and contact.
     private const float GroundContactSlop = 0.025f;
+    // Match the native grounded keyboard sweep. Living creatures are obstacles,
+    // not support surfaces; this is still a ground-plane path test.
+    private const int AirCheckCreatures = 1;
     private const int MaxCorrectionFrames = 4;
 
     // Read-only native jump state for visual camera effects. No extra stepping,
@@ -186,6 +190,7 @@ internal static unsafe class JumpPositionService
             _air.Launch(new Vector2(current.X, current.Y), carry);
             _haveGroundSample = false;
             _walkAtLaunch = _walkReapplies;
+            _airBlockReported = false;
             _correctionStreak = 0;
             _airborne = true;
             _creature = player; _module = module;
@@ -268,7 +273,22 @@ internal static unsafe class JumpPositionService
             Vector2 previous = _air.Position;
             Vector2 proposed = _air.Step(subDt, wish);
             Vector2 accepted = ConstrainHorizontal(player, module, previous, proposed);
-            if (Vector2.DistanceSquared(proposed, accepted) > 1e-6f) _airBlockedSteps++;
+            if (Vector2.DistanceSquared(proposed, accepted) > 1e-6f)
+            {
+                _airBlockedSteps++;
+                // One ordinary log marker per flight, plus the existing bounded
+                // detailed trace when active. A refusal is not NPC identification.
+                if (!_airBlockReported)
+                {
+                    _airBlockReported = true;
+                    Trace("air_horizontal_blocked", current);
+                }
+                if (JumpTimingTrace.Active)
+                    JumpTimingTrace.Mark("air_collision_clip",
+                        new Vector3(previous.X, previous.Y, _groundZ),
+                        new Vector3(proposed.X, proposed.Y, _groundZ),
+                        new Vector3(accepted.X, accepted.Y, _groundZ));
+            }
             _air.Resolve(accepted);
         }
         Vector2 end = _air.Position;
@@ -305,7 +325,7 @@ internal static unsafe class JumpPositionService
         Vec3 a = new() { X = from.X, Y = from.Y, Z = _groundZ };
         Vec3 b = new() { X = to.X, Y = to.Y, Z = _groundZ };
         return test(area.Ptr, creature, VectorArg.Of(&a), VectorArg.Of(&b),
-                    space[0], space[1], 0) == 1;
+                    space[0], space[1], AirCheckCreatures) == 1;
     }
 
     // Slide along a wall by retrying one horizontal axis at a time.
