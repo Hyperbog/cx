@@ -151,9 +151,8 @@ public static partial class ShadowMath
     }
 
     /// <summary>The roll-free camera basis (world is Z-up) and the half-fov tangents, shared by every
-    /// camera-frustum test here. <paramref name="fovy"/> is degrees as SetPerspective delivers it (values
-    /// &lt;= 3.2 = radians, defensively).</summary>
-    private static void CameraBasis(Vector3 camFwd, float fovy, float aspect,
+    /// camera-frustum test here. <paramref name="verticalDegrees"/> is vertical degrees as SetPerspective delivers it.</summary>
+    private static void CameraBasis(Vector3 camFwd, float verticalDegrees, float aspect,
                                     out Vector3 fwd, out Vector3 right, out Vector3 up, out float tanX, out float tanY)
     {
         fwd = Vector3.Normalize(camFwd);
@@ -161,7 +160,7 @@ public static partial class ShadowMath
         // straight-down camera: pick any horizontal right axis (roll-free by construction)
         right = right.LengthSquared() < 1e-6f ? new Vector3(1f, 0f, 0f) : Vector3.Normalize(right);
         up = Vector3.Cross(right, fwd);
-        float halfY = fovy * (fovy > 3.2f ? MathF.PI / 360f : 0.5f);
+        float halfY = verticalDegrees * (MathF.PI / 360f);
         tanY = MathF.Tan(halfY);
         tanX = tanY * aspect;
     }

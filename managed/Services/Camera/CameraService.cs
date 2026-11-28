@@ -977,6 +977,10 @@ public sealed unsafe class CameraService : IExtenderService
     public static void SelfCheck(ExtenderLog log)
     {
         var check = new Checker(log);
+        int projectionFailures = ProjectionConsumerCheck.Failures();
+        check.Expect((projectionFailures & 1) == 0, "projection parity: aim pixels match the world matrix");
+        check.Expect((projectionFailures & 2) == 0, "projection parity: sphere culling matches the world edges");
+        check.Expect((projectionFailures & 4) == 0, "projection parity: receiver planes match the world edges");
         static bool Near(Vector3 a, Vector3 b) => (a - b).Length() < 1e-4f;
         Vector3 f0 = Forward(Pose(0, 0));
         check.Expect(Near(f0, new Vector3(0, 0, 1)), "pitch 0 is straight above the focus (top-down)");

@@ -236,29 +236,35 @@ internal unsafe struct Projector
     private Vector3 _eye, _fwd, _right, _up;
     private float _cx, _cy, _tanHalf, _aspect, _near;
 
-    /// <summary>A view angle at or below this is taken as a radian half-angle rather than degrees -- the same
-    /// hedge <c>ShadowMath.ViewBasis</c> carries, so a stray build cannot project 57x too wide.</summary>
-    private const float FovRadianCeiling = 3.2f;
-
     /// <summary>False when the camera or the centre is not usable this frame.</summary>
     internal static bool Read(CX.Engine.Camera cam, int cx, int cy, out Projector p)
     {
         p = default;
         if (cam.IsNull || cx <= 0 || cy <= 0) return false;
-        float fov = cam.ViewAngle;
-        if (!(fov > 0f)) return false;
+        float verticalDegrees = cam.ViewAngle;
+        if (!(verticalDegrees > 0f)) return false;
         Quaternion rot = cam.Rot;
-        p._eye = cam.Pos;
+        Vector3 eye = cam.Pos;
+        float vw = cam.ViewW, vh = cam.ViewH;
+        p = FromView(eye, rot, cx, cy, verticalDegrees, vh > 0f ? vw / vh : (float)cx / cy, cam.Near);
+        return true;
+    }
+
+    // Shared by the live camera read and the off-device projection parity check.
+    internal static Projector FromView(Vector3 eye, Quaternion rot, int cx, int cy,
+                                       float verticalDegrees, float aspect, float near)
+    {
+        Projector p = default;
+        p._eye = eye;
         p._fwd = Vector3.Transform(new Vector3(0f, 0f, -1f), rot);
         p._right = Vector3.Transform(new Vector3(1f, 0f, 0f), rot);
         p._up = Vector3.Transform(new Vector3(0f, 1f, 0f), rot);
-        float vw = cam.ViewW, vh = cam.ViewH;
-        p._aspect = vh > 0f ? vw / vh : (float)cx / cy;
-        p._tanHalf = MathF.Tan(fov * (fov > FovRadianCeiling ? MathF.PI / 360f : 0.5f));
-        p._near = cam.Near;
+        p._aspect = aspect;
+        p._tanHalf = MathF.Tan(verticalDegrees * (MathF.PI / 360f));
+        p._near = near;
         if (!(p._near > 0f)) p._near = 0.1f;
         p._cx = cx; p._cy = cy;
-        return true;
+        return p;
     }
 
     /// <summary>World point -&gt; SDL window pixels; false (and nothing mirrored onto the screen) for anything at
