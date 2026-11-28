@@ -318,6 +318,33 @@ public sealed unsafe class CameraService : IExtenderService
     private static bool _eyeTracking;
     private static int _eyeTraceCount, _eyeLastAnim = -1;
     private static bool _eyeLastTracked;
+    private static JumpEyeHeight _jumpEyeHeight;
+    private static (IntPtr Camera, IntPtr Player, IntPtr Area) _jumpEyeOwner;
+
+    private static void ResetJumpEye()
+    {
+        _jumpEyeHeight.Reset();
+        _jumpEyeOwner = default;
+    }
+
+    private static void SetJumpEyeHeight(IntPtr camera, IntPtr player, float actorZ,
+                                         bool airborne, float dt, ref Vector3 eye)
+    {
+        IntPtr module = Module();
+        IntPtr area = module == IntPtr.Zero ? IntPtr.Zero : new CNWCModule(module).CurrentArea.Ptr;
+        if (area == IntPtr.Zero || !MouseLookService.ActionHeld)
+        {
+            ResetJumpEye();
+            return;
+        }
+        var owner = (camera, player, area);
+        if (_jumpEyeOwner != owner)
+        {
+            _jumpEyeHeight.Reset();
+            _jumpEyeOwner = owner;
+        }
+        eye.Z = _jumpEyeHeight.Resolve(actorZ, eye.Z, airborne, dt);
+    }
 
     private static void ResetAnimatedEye()
     {
@@ -420,6 +447,9 @@ public sealed unsafe class CameraService : IExtenderService
         // The engine changes follow yaw/pitch for NPC dialogue. Lock the player's last
         // first-person look while its conversation UI is visible, including the exit edge.
         bool fpDialog = g == Gate.Active && mode == 2 && !FreeCameraService.Active && NpcDialogActive;
+        if (g != Gate.NotWorldCamera && (g != Gate.Active || mode != 2 || fpDialog
+            || FreeCameraService.Active || !CameraModes.Driving.FirstPersonActive || !MouseLook.ActionEnabled))
+            ResetJumpEye();
         if (fpDialog)
         {
             if (!_npcDialogHold)
@@ -535,6 +565,7 @@ public sealed unsafe class CameraService : IExtenderService
                         catch (Exception) { /* Observation only. */ }
                     }
                     tracked = RestoreAnimatedEye(player, dt, fpDialog, fallback, ref eye, ref q);
+                    if (!fpDialog) SetJumpEyeHeight(cam, player, actor.Z, airborne, dt, ref eye);
                 }
                 else
                 {
@@ -568,6 +599,7 @@ public sealed unsafe class CameraService : IExtenderService
                 return;
             }
         }
+        ResetJumpEye();
         if (_eyePlayer != IntPtr.Zero) ResetAnimatedEye();
         Vector3 pos = _sFocus + _sDist * Forward(q);
         float offX = m.OffsetX.V, offY = m.OffsetY.V;
