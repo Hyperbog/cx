@@ -15,7 +15,9 @@
 // appears byte-for-byte below it after newline/BOM normalization.
 // END FIX14D-J4 PUBLICATION NOTES
 
+using System;
 using System.Threading;
+using System.Diagnostics;
 
 namespace CX.Services.Camera;
 
@@ -25,7 +27,7 @@ namespace CX.Services.Camera;
 /// </summary>
 internal static class JumpPreview
 {
-    private static int _spaceEdge;
+    private static long _spaceEdge;
     private const uint KeyDown = 0x300, KeyUp = 0x301, Space = 32;
 
     internal static bool CaptureKey(uint kind, uint sym, byte repeat, bool actionHeld)
@@ -37,19 +39,21 @@ internal static class JumpPreview
         {
             if (repeat == 0)
             {
-                int previous = Interlocked.Exchange(ref _spaceEdge, 1);
-                JumpTimingTrace.Key(previous);
+                long previous = Interlocked.Exchange(ref _spaceEdge, Stopwatch.GetTimestamp());
+                JumpTimingTrace.Key(previous != 0 ? 1 : 0);
             }
             return true;
         }
         return kind == KeyUp;
     }
 
-    internal static bool Take()
+    internal static bool Take(out float inputAge)
     {
-        bool pressed = Interlocked.Exchange(ref _spaceEdge, 0) != 0;
-        if (pressed) JumpTimingTrace.Mark("consume");
-        return pressed;
+        long tick = Interlocked.Exchange(ref _spaceEdge, 0);
+        inputAge = tick == 0 ? 0f : (float)Math.Max(0d,
+            (Stopwatch.GetTimestamp() - tick) / (double)Stopwatch.Frequency);
+        if (tick != 0) JumpTimingTrace.Mark("consume", x: inputAge);
+        return tick != 0;
     }
     internal static void Reset()
     {

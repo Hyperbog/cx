@@ -146,19 +146,25 @@ internal static unsafe class JumpPositionService
             JumpPreview.Reset();
             return;
         }
-        if (!(dt > 0f && dt < 0.12f))
+        // Do not lose ordinary elapsed time or snap an airborne actor to the
+        // floor merely because a frame was slow. Long suspensions freeze the
+        // flight clock until a valid update; retain the queued input edge.
+        if (!JumpBallistics.AcceptFrame(dt))
         {
             JumpTimingTrace.Mark("invalid_dt", x: dt);
-            if (_airborne) Land(player, restore: true);
-            JumpPreview.Reset();
+            if (!_airborne)
+            {
+                _haveGroundSample = false;
+                _groundVelocity = Vector2.Zero;
+            }
             return;
         }
-        // Explicitly use a small time step to prevent a hanged/paused frame
-        // from launching the player upward by multiple metres.
-        dt = Math.Clamp(dt, 0.001f, 0.040f);
         Vector3 current = new CNWCObject(player).Position;
         if (!Finite(current)) { _airborne = false; JumpPreview.Reset(); return; }
-        bool press = JumpPreview.Take();
+        bool press = JumpPreview.Take(out float inputAge);
+        // The frame interval can include time BEFORE the Space press. Start
+        // the new flight only over the portion after the recorded input.
+        if (!_airborne && press) dt = JumpBallistics.LaunchElapsed(dt, inputAge);
         JumpTimingTrace.Mark("step", current, new Vector3(_rise, _velocity, _airTime),
             new Vector3(_floor, _groundZ, _expectedZ), x: dt, y: press ? 1 : 0, z: _airborne ? 1 : 0);
         if (!_airborne && !press)
@@ -214,9 +220,10 @@ internal static unsafe class JumpPositionService
 
         // Ballistic height is anchored to TAKEOFF Z, not the rising/falling
         // ground sample. A downhill jump may continue past the takeoff height.
-        float next = _rise + _velocity * dt - 0.5f * Gravity * dt * dt;
-        _velocity -= Gravity * dt;
+        if (dt <= 0f) return;
         _airTime += dt;
+        float next = JumpBallistics.Height(_airTime, Impulse, Gravity);
+        _velocity = JumpBallistics.Velocity(_airTime, Impulse, Gravity);
         if (_airTime > MaxWorldFlightSeconds || next < -MaxWorldDrop)
         {
             // No verified nearby ground contact: stop the local jump edits
@@ -236,13 +243,23 @@ internal static unsafe class JumpPositionService
             Land(player, restore: false);
             return;
         }
-        Vector2 previous = _air.Position;
-        Vector2 proposed = _air.Step(dt, CameraDriveService.AirWish);
-        if (CameraDriveService.AirWish.LengthSquared() > 0.01f) _airSteerFrames++;
-        Vector2 accepted = ConstrainHorizontal(player, module, previous, proposed);
-        if (Vector2.DistanceSquared(proposed, accepted) > 1e-6f) _airBlockedSteps++;
-        _air.Resolve(accepted);
-        WriteCreaturePosition(player, new Vector3(accepted.X, accepted.Y, flightZ));
+        // AirMomentumMotor has its own 40 ms ceiling. Divide the entire
+        // interval into bounded collision-tested segments instead of silently
+        // losing horizontal time. Keep one native position write per tick.
+        Vector2 wish = CameraDriveService.AirWish;
+        if (wish.LengthSquared() > 0.01f) _airSteerFrames++;
+        int slices = JumpBallistics.HorizontalSlices(dt);
+        float subDt = dt / slices;
+        for (int i = 0; i < slices; i++)
+        {
+            Vector2 previous = _air.Position;
+            Vector2 proposed = _air.Step(subDt, wish);
+            Vector2 accepted = ConstrainHorizontal(player, module, previous, proposed);
+            if (Vector2.DistanceSquared(proposed, accepted) > 1e-6f) _airBlockedSteps++;
+            _air.Resolve(accepted);
+        }
+        Vector2 end = _air.Position;
+        WriteCreaturePosition(player, new Vector3(end.X, end.Y, flightZ));
     }
 
     // Sample NWN's real takeoff motion. Anomalous/teleport-sized deltas are
