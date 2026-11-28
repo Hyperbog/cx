@@ -53,6 +53,7 @@ internal static unsafe class JumpPositionService
 
     // J1: observer only. Never feeds a sample back into the motor or native writes.
     private static ExtenderLog? _trace;
+    private static readonly JumpGroundAudit _groundAudit = new();
     private static long _launchAt, _nextWalkSample;
     private static float _nativeWalkZ;
     internal static void ConfigureTrace(ExtenderLog log)
@@ -78,6 +79,14 @@ internal static unsafe class JumpPositionService
             $"ground_gap={_floor + _rise - _groundZ:F3} air_t={_airTime:F3} " +
             $"vz={_velocity:F3} " +
             $"corrections={_corrections} reapplies={_walkReapplies} aborts={_aborts}");
+        if (reason is "native_ground_slope_abort" or "native_ground_discontinuity_abort"
+            or "unverified_ground_contact_abort" or "unverified_walk_authority_abort"
+            or "world_fall_guard_abort" or "unverified_restore_skipped")
+        {
+            var auditLog = _trace;
+            try { _groundAudit.Dump(reason, line => auditLog.Info(line)); }
+            catch (Exception) { /* Diagnostic must not change movement. */ }
+        }
     }
 
     // Physically integrated ballistic arc (units in NWN meters/seconds).
@@ -204,6 +213,7 @@ internal static unsafe class JumpPositionService
             _nativeWalkStepLimit = GroundStepAllowance;
             _haveAcceptedWalk = true;
             _groundSampleMissing = false;
+            _groundAudit.Reset();
             Trace("launch", current);
         }
         else if (MathF.Abs(current.Z - _expectedZ) > 0.12f)
@@ -420,7 +430,16 @@ internal static unsafe class JumpPositionService
         // The outer bridge runs AFTER StepGuard. A refused step may restore
         // our own airborne height; even an accepted no-op is not a terrain
         // projection. Never feed either value back into the ground estimate.
-        if (JumpGroundProvenance.Missing(before, actual, _expectedZ, guardRefused))
+        bool missing = JumpGroundProvenance.Missing(before, actual, _expectedZ, guardRefused);
+        try
+        {
+            _groundAudit.Record(before, actual, _air.Position, _lastAcceptedWalkXY,
+                _expectedZ, _groundZ, _floor, _airTime, _velocity,
+                _nativeWalkStepXY, _nativeWalkStepZ, _nativeWalkStepLimit,
+                guardRefused, missing, _groundSampleMissing);
+        }
+        catch (Exception) { /* Diagnostic must not change movement. */ }
+        if (missing)
         {
             if (!_groundSampleMissing)
                 Trace(guardRefused ? "ground_guard_refused" : "ground_no_projection", actual);
