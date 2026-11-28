@@ -45,7 +45,7 @@ internal static unsafe class JumpPositionService
     // A slope check catches feedback loops that accumulate in small (<0.45) steps.
     private static Vector2 _lastAcceptedWalkXY;
     private static float _lastAcceptedWalkZ, _nativeWalkStepXY, _nativeWalkStepZ, _nativeWalkStepLimit;
-    private static bool _haveAcceptedWalk;
+    private static bool _haveAcceptedWalk, _groundSampleMissing;
     private static int _slopeGuardAborts;
 
     private static int _jumps, _lands, _corrections, _aborts, _correctionStreak, _walkReapplies;
@@ -198,6 +198,7 @@ internal static unsafe class JumpPositionService
             _nativeWalkStepXY = _nativeWalkStepZ = 0f;
             _nativeWalkStepLimit = GroundStepAllowance;
             _haveAcceptedWalk = true;
+            _groundSampleMissing = false;
             Trace("launch", current);
         }
         else if (MathF.Abs(current.Z - _expectedZ) > 0.12f)
@@ -239,6 +240,18 @@ internal static unsafe class JumpPositionService
         if (flightZ < _groundZ - GroundContactSlop)
         {
             // Validated native walk elevation is the contact surface.
+            // A missing projection cannot establish a new landing surface.
+            // Keep the prior verified support only at essentially the same XY.
+            if (_groundSampleMissing && !JumpGroundProvenance.SameSupport(
+                new Vector2(current.X, current.Y), _lastAcceptedWalkXY))
+            {
+                Trace("unverified_ground_contact_abort", current);
+                _airborne = false;
+                _haveGroundSample = false;
+                JumpPreview.Reset();
+                _aborts++;
+                return;
+            }
             Trace("world_contact_tick", current);
             Land(player, restore: false);
             return;
@@ -339,17 +352,24 @@ internal static unsafe class JumpPositionService
         catch (Exception) { /* Observations never alter the motor. */ }
     }
 
-    internal static void BeforeWalk(IntPtr creature)
+    internal static Vector3? BeforeWalk(IntPtr creature)
     {
-        if (!JumpTimingTrace.Active || !AirborneFor(creature) || CameraService.Module() != _module) return;
-        ObservePosition("walk_before", creature, new Vector3(_air.Position.X, _air.Position.Y, _expectedZ));
+        if (!AirborneFor(creature) || CameraService.Module() != _module) return null;
+        Vector3 before = new CNWCObject(creature).Position;
+        if (!Finite(before)) return null;
+        if (JumpTimingTrace.Active)
+            ObservePosition("walk_before", creature, new Vector3(_air.Position.X, _air.Position.Y, _expectedZ));
+        return before;
     }
 
     private static void Land(IntPtr player, bool restore)
     {
         Vector3 current = new CNWCObject(player).Position;
         Trace(restore ? "restore_to_ground" : "land_on_ground", current);
-        if (Finite(current) && (!restore || MathF.Abs(current.Z - _expectedZ) <= 0.25f))
+        bool knownSupport = !_groundSampleMissing || JumpGroundProvenance.SameSupport(
+            new Vector2(current.X, current.Y), _lastAcceptedWalkXY);
+        if (restore && !knownSupport) Trace("unverified_restore_skipped", current);
+        if (knownSupport && Finite(current) && (!restore || MathF.Abs(current.Z - _expectedZ) <= 0.25f))
             WriteCreaturePosition(player, new Vector3(current.X, current.Y, _groundZ));
         _rise = 0f;
         _velocity = 0f;
@@ -363,7 +383,7 @@ internal static unsafe class JumpPositionService
     // Run after the engine's native walking step. Preserve its actual X/Y and
     // restore our current airborne height if the walkmesh flattened Z.
     // This method does not integrate gravity or consume input.
-    internal static void AfterWalk(IntPtr creature)
+    internal static void AfterWalk(IntPtr creature, Vector3? before, bool guardRefused)
     {
         if (!_airborne || creature == IntPtr.Zero || creature != _creature ||
             CameraService.Module() != _module) return;
@@ -377,6 +397,27 @@ internal static unsafe class JumpPositionService
             ? Vector2.Distance(nativeXY, _lastAcceptedWalkXY) : 0f;
         _nativeWalkStepZ = _haveAcceptedWalk ? actual.Z - _lastAcceptedWalkZ : 0f;
         _nativeWalkStepLimit = GroundStepAllowance + MaxGroundSlope * _nativeWalkStepXY;
+        // The outer bridge runs AFTER StepGuard. A refused step may restore
+        // our own airborne height; even an accepted no-op is not a terrain
+        // projection. Never feed either value back into the ground estimate.
+        if (JumpGroundProvenance.Missing(before, actual, _expectedZ, guardRefused))
+        {
+            if (!_groundSampleMissing)
+                Trace(guardRefused ? "ground_guard_refused" : "ground_no_projection", actual);
+            _groundSampleMissing = true;
+            // Do not overwrite a native correction, or continue from a large
+            // unverified displacement. Existing native authority wins.
+            if (!before.HasValue || MathF.Abs(actual.Z - _expectedZ) > JumpGroundProvenance.HeightTolerance ||
+                Vector2.DistanceSquared(nativeXY, _air.Position) > 16f)
+            {
+                Trace("unverified_walk_authority_abort", actual);
+                _airborne = false;
+                _haveGroundSample = false;
+                JumpPreview.Reset();
+                _aborts++;
+            }
+            return;
+        }
         long sampledAt = Stopwatch.GetTimestamp();
         if (sampledAt >= _nextWalkSample)
         {
@@ -415,6 +456,7 @@ internal static unsafe class JumpPositionService
         _lastAcceptedWalkXY = nativeXY;
         _lastAcceptedWalkZ = actual.Z;
         _haveAcceptedWalk = true;
+        _groundSampleMissing = false;
         _groundZ = actual.Z;
         _expectedZ = _floor + _rise;
         if (_expectedZ < _groundZ - GroundContactSlop)

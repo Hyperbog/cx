@@ -44,6 +44,8 @@ public sealed unsafe class StepGuardService : IExtenderService
 
     private static bool _live, _probeOk;
     private static int _steps, _walkRefusals, _driveRefusals;
+    // Player-only guard rollback serial: sampled around the existing walk chain.
+    internal static int RefusalSerial => unchecked(_walkRefusals + _driveRefusals);
     private const int M11CheckCreatures = 1;
     private const float M11ProbeDistance = 0.10f;
     private static int _m11Completions;

@@ -42,10 +42,13 @@ public sealed unsafe class JumpWalkBridgeService : IExtenderService
     [UnmanagedCallersOnly]
     private static int OnWalkUpdateLocation(IntPtr creature)
     {
-        try { JumpPositionService.BeforeWalk(creature); }
-        catch (Exception) { /* Observation only. */ }
+        System.Numerics.Vector3? before = null;
+        int refusals = StepGuardService.RefusalSerial;
+        try { before = JumpPositionService.BeforeWalk(creature); }
+        catch (Exception) { /* No valid ground observation. */ }
         int result = (*_next)(creature);
-        try { JumpPositionService.AfterWalk(creature); }
+        try { JumpPositionService.AfterWalk(creature, before,
+            refusals != StepGuardService.RefusalSerial); }
         catch (Exception) { /* area changes can invalidate a creature mid-frame */ }
         return result;
     }
