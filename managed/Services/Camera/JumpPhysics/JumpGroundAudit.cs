@@ -12,6 +12,9 @@ internal sealed class JumpGroundAudit
     private readonly Sample[] _samples = new Sample[Capacity];
     private int _next, _count, _dumps;
     private long _seen;
+    internal bool WantsTerrain => _dumps < DumpLimit;
+    internal readonly record struct TerrainObservation(string? Status, Vector3 Point = default,
+        Vector3 Normal = default, int Surface = -1, int Part = -1, int Face = -1, uint Scene = 0);
     private struct Sample
     {
         internal long Number, Tick;
@@ -20,18 +23,20 @@ internal sealed class JumpGroundAudit
         internal Vector2 Air, Support;
         internal float Expected, Ground, Floor, Time, Velocity, StepXY, StepZ, Limit;
         internal bool Refused, Missing, PriorMissing;
+        internal TerrainObservation Terrain;
     }
     internal void Reset() { _next = _count = 0; _seen = 0; }
     internal void Record(Vector3? before, Vector3 after, Vector2 air, Vector2 support,
         float expected, float ground, float floor, float time, float velocity,
-        float stepXY, float stepZ, float limit, bool refused, bool missing, bool priorMissing)
+        float stepXY, float stepZ, float limit, bool refused, bool missing, bool priorMissing,
+        TerrainObservation terrain = default)
     {
         if (_dumps >= DumpLimit) return;
         _samples[_next] = new Sample { Number = ++_seen, Tick = Stopwatch.GetTimestamp(),
             Before = before, After = after, Air = air, Support = support,
             Expected = expected, Ground = ground, Floor = floor, Time = time,
             Velocity = velocity, StepXY = stepXY, StepZ = stepZ, Limit = limit,
-            Refused = refused, Missing = missing, PriorMissing = priorMissing };
+            Refused = refused, Missing = missing, PriorMissing = priorMissing, Terrain = terrain };
         _next = (_next + 1) % Capacity;
         if (_count < Capacity) _count++;
     }
@@ -48,7 +53,9 @@ internal sealed class JumpGroundAudit
             emit(FormattableString.Invariant($"[efp-ground] sample dump={dump} seq={s.Number} tick={s.Tick} air_t={s.Time:F6} vz={s.Velocity:F6} ") +
                 $"pre={(s.Before.HasValue ? V(s.Before.Value) : "none")} post={V(s.After)} air_xy={V(s.Air)} support_xy={V(s.Support)} " +
                 FormattableString.Invariant($"expected={s.Expected:F6} ground={s.Ground:F6} floor={s.Floor:F6} step_xy={s.StepXY:F6} step_z={s.StepZ:F6} limit={s.Limit:F6} ") +
-                $"refused={(s.Refused ? 1 : 0)} missing={(s.Missing ? 1 : 0)} prior_missing={(s.PriorMissing ? 1 : 0)}");
+                $"refused={(s.Refused ? 1 : 0)} missing={(s.Missing ? 1 : 0)} prior_missing={(s.PriorMissing ? 1 : 0)} " +
+                $"terrain={s.Terrain.Status ?? "not_sampled"} terrain_point={V(s.Terrain.Point)} terrain_normal={V(s.Terrain.Normal)} " +
+                $"terrain_surface={s.Terrain.Surface} terrain_part={s.Terrain.Part} terrain_face={s.Terrain.Face} terrain_scene={s.Terrain.Scene}");
         }
         emit($"[efp-ground] end dump={dump}");
     }

@@ -436,7 +436,8 @@ internal static unsafe class JumpPositionService
             _groundAudit.Record(before, actual, _air.Position, _lastAcceptedWalkXY,
                 _expectedZ, _groundZ, _floor, _airTime, _velocity,
                 _nativeWalkStepXY, _nativeWalkStepZ, _nativeWalkStepLimit,
-                guardRefused, missing, _groundSampleMissing);
+                guardRefused, missing, _groundSampleMissing,
+                _groundAudit.WantsTerrain ? JumpTerrainProbe.Observe(actual, _expectedZ, _groundZ, _floor) : default);
         }
         catch (Exception) { /* Diagnostic must not change movement. */ }
         if (missing)
