@@ -34,7 +34,7 @@ namespace CX.Services.Camera;
 /// </summary>
 internal static unsafe class JumpPositionService
 {
-    private static bool _airborne;
+    private static bool _airborne, _presentationFaultSaid;
     private static IntPtr _creature, _module;
     private static float _floor, _groundZ, _rise, _velocity, _expectedZ, _airTime;
     private static readonly AirMomentumMotor _air = new();
@@ -318,6 +318,17 @@ internal static unsafe class JumpPositionService
         ref Vector3 desired = ref c.DesiredPos;
         desired = target;
         _expectedZ = target.Z;
+        try { JumpPresentationSync.AfterWrite(player, target); }
+        catch (Exception ex)
+        {
+            // Presentation must never cancel physical flight on a managed fault.
+            if (!_presentationFaultSaid)
+            {
+                _presentationFaultSaid = true;
+                _trace?.Always("Jump presentation sync failed: " + ex.Message);
+            }
+            JumpTimingTrace.Mark("sync_fault");
+        }
         if (JumpTimingTrace.Active) ObservePosition("write_after", player, target);
     }
 

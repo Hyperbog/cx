@@ -528,7 +528,12 @@ public sealed unsafe class CameraService : IExtenderService
                     if (!fpDialog) HeadBoneCamera.TurnCharacter(player, q);
                     FirstPersonWorldGuard.ClearCameraContact();
                     airborne = JumpPositionService.AirborneFor(player);
-                    if (!fpDialog) JumpTimingTrace.Mark("model", feet, actor, eye, x: dt, y: airborne ? 1 : 0);
+                    if (!fpDialog)
+                    {
+                        JumpTimingTrace.Mark("model", feet, actor, eye, x: dt, y: airborne ? 1 : 0);
+                        try { JumpPresentationSync.ObserveCamera(player, actor); }
+                        catch (Exception) { /* Observation only. */ }
+                    }
                     tracked = RestoreAnimatedEye(player, dt, fpDialog, fallback, ref eye, ref q);
                 }
                 else
